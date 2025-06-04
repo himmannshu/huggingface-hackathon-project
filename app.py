@@ -8,8 +8,9 @@ modal_app = None
 
 try:
     import modal
-    # Import the deployed function using Modal's Function.from_name method
+    # Import the deployed functions using Modal's Function.from_name method
     process_video_to_audio = modal.Function.from_name("youtube-content-optimizer", "process_video_to_audio")
+    transcribe_audio_with_whisper = modal.Function.from_name("youtube-content-optimizer", "transcribe_audio_with_whisper")
     MODAL_AVAILABLE = True
     print("✅ Modal connection established!")
 except Exception as e:
@@ -20,16 +21,16 @@ except Exception as e:
 def process_video(video_file):
     """
     Main processing function for the video content optimization pipeline.
-    Steps 1 & 2: Video upload and audio extraction via Modal (or demo mode)
-    Steps 3-6: To be implemented (Whisper, content generation, thumbnails)
+    Steps 1-3: Video upload, audio extraction, and Whisper transcription via Modal
+    Steps 4-6: To be implemented (content generation, thumbnails)
     """
     if video_file is None:
-        return "Please upload a video file.", "", "", None, None, None
+        return "Please upload a video file.", "", "", "", None, None, None
     
     try:
         if MODAL_AVAILABLE:
-            # Real Modal processing
-            status = "🔄 Processing video... Uploading to Modal for audio extraction"
+            # Step 1: Video Upload Processing
+            status = "🔄 Step 1/3: Processing video... Uploading to Modal for audio extraction"
             
             # Read video file
             with open(video_file, "rb") as f:
@@ -39,21 +40,47 @@ def process_video(video_file):
             
             print(f"📤 Sending video to Modal for processing...")
             
-            # Call the deployed Modal function using the proper method
+            # Step 2: Audio Extraction
             audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
             
-            status = f"✅ Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)"
+            status = f"✅ Step 2/3: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/3: Starting Whisper transcription..."
             
-            # Placeholder for Steps 3-6 (to be implemented)
-            title = "Generated Title: [Step 3-6 to be implemented - Whisper transcription needed]"
-            description = f"Generated Description: [Will be created after audio transcription]\n\nAudio file ready: {audio_filename}"
+            # Step 3: Whisper Transcription
+            print(f"🎙️ Sending audio to Whisper for transcription...")
+            transcription_data = transcribe_audio_with_whisper.remote(audio_bytes, audio_filename)
+            
+            # Extract transcription details
+            transcript_text = transcription_data["text"]
+            language = transcription_data["language"]
+            duration = transcription_data["duration"]
+            word_count = transcription_data["word_count"]
+            
+            status = f"✅ Step 3/3: Transcription complete!\n" \
+                    f"📝 Language: {language.upper()} | ⏱️ Duration: {duration:.1f}s | 📄 Words: {word_count}"
+            
+            # Placeholder for Steps 4-6 (to be implemented)
+            title = "Generated Title: [Steps 4-6 to be implemented - Content generation needed]"
+            description = f"Generated Description: [Will be created using transcription]\n\nTranscription ready for content generation!"
+            
+            return (
+                status,
+                title,
+                description,
+                transcript_text,  # New transcription output
+                None,  # Thumbnail 1
+                None,  # Thumbnail 2
+                None   # Thumbnail 3
+            )
             
         else:
             # Demo mode without Modal
             filename = os.path.basename(video_file) if video_file else "demo_video.mp4"
             file_size = os.path.getsize(video_file) / (1024*1024) if video_file else 0
             
-            status = f"🎭 DEMO MODE: Simulating video processing for {filename} ({file_size:.1f} MB)\n✅ In real deployment, this would extract audio via Modal + FFmpeg"
+            status = f"🎭 DEMO MODE: Simulating video processing for {filename} ({file_size:.1f} MB)\n" \
+                    f"✅ Step 1/3: Video upload simulated\n" \
+                    f"✅ Step 2/3: Audio extraction simulated\n" \
+                    f"✅ Step 3/3: Whisper transcription simulated"
             
             title = "🎬 Demo Generated Title: 'How to Build Amazing AI Apps with Gradio and Modal'"
             description = """🎭 Demo Generated Description:
@@ -70,20 +97,31 @@ This is a demo of our YouTube Content Optimizer - in the real version, this cont
 🚀 Built with: Gradio + Modal + OpenAI Whisper + AI Content Generation
 
 #AI #ContentCreation #YouTube #Automation"""
-        
-        return (
-            status,
-            title,
-            description, 
-            None,  # Thumbnail 1
-            None,  # Thumbnail 2
-            None   # Thumbnail 3
-        )
+
+            demo_transcript = """🎭 Demo Transcription:
+
+Hello and welcome to this tutorial on building AI applications with Gradio and Modal. In this video, we'll explore how to create scalable, cloud-based AI workflows that can process video content automatically.
+
+First, we'll set up our Modal infrastructure with GPU support for running Whisper AI transcription. Then we'll integrate it with a beautiful Gradio interface that allows users to upload videos and get instant results.
+
+The power of this combination is that we can handle heavy computational tasks in the cloud while providing a smooth user experience through the web interface. This makes AI accessible to everyone, regardless of their local hardware capabilities.
+
+Thank you for watching, and don't forget to subscribe for more AI development tutorials!"""
+
+            return (
+                status,
+                title,
+                description,
+                demo_transcript,
+                None,  # Thumbnail 1
+                None,  # Thumbnail 2
+                None   # Thumbnail 3
+            )
         
     except Exception as e:
         error_status = f"❌ Error processing video: {str(e)}"
         print(f"Error details: {e}")
-        return error_status, "", "", None, None, None
+        return error_status, "", "", "", None, None, None
 
 def test_modal_connection():
     """Test if Modal connection works"""
@@ -92,12 +130,15 @@ def test_modal_connection():
         return True
         
     try:
-        # Simple connection test - check if we can access the function
-        if hasattr(process_video_to_audio, 'remote'):
+        # Test both functions are accessible
+        if (hasattr(process_video_to_audio, 'remote') and 
+            hasattr(transcribe_audio_with_whisper, 'remote')):
             print("✅ Modal app connection successful!")
+            print("✅ Audio extraction function ready")
+            print("✅ Whisper transcription function ready")
             return True
         else:
-            print("❌ Modal function not found")
+            print("❌ Modal functions not found")
             return False
     except Exception as e:
         print(f"❌ Modal connection error: {e}")
@@ -174,9 +215,18 @@ def create_interface():
                 
                 # Status right below the button
                 status_output = gr.Textbox(
-                    label="Status",
+                    label="Processing Status",
                     lines=4,
                     interactive=False,
+                    visible=True
+                )
+                
+                # Transcription display - NEW!
+                transcription_output = gr.Textbox(
+                    label="📝 Generated Transcription",
+                    lines=8,
+                    interactive=False,
+                    placeholder="Transcription will appear here after audio processing...",
                     visible=True
                 )
         
@@ -237,6 +287,7 @@ def create_interface():
                 status_output,
                 title_output, 
                 description_output,
+                transcription_output,  # NEW transcription output
                 thumbnail1,
                 thumbnail2,
                 thumbnail3
