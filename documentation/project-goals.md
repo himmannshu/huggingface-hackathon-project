@@ -40,17 +40,50 @@ To develop an automated content enhancement pipeline that helps content creators
   - Automatic language detection and processing
 - **Output**: Complete transcription of video content with timing information
 
-### Step 4: Content Analysis & Search Term Generation
-- **Agent Function**: AI agent creates search terms for YouTube content extraction
-- **Process**: Analyzes transcribed content to generate relevant search queries
-- **Additional Output**: Generates initial video description based on content
+### Step 4: AI Agent Content Analysis & Search Term Generation ✅
+- **Primary Function**: Intelligent video content analysis using transcribed speech data
+- **AI Agent Process**: 
+  - **Video Summary Creation**: Analyzes complete transcript to generate comprehensive summary of video content, identifying key topics, themes, and main discussion points
+  - **Search Term Generation**: Creates 1-3 targeted YouTube search terms based on video content analysis
+  - **Search Strategy**: Generates terms that actual YouTube users would search for to find similar content (e.g., if video discusses "new MacBook Pro features", generates search terms like "MacBook Pro 2024 review", "MacBook Pro features comparison", "latest MacBook Pro specs")
+- **Input**: Complete transcription with timing data from Step 3
+- **Output**: 
+  - Structured video summary highlighting main topics and key points
+  - 1-3 optimized YouTube search terms for content discovery
+  - Initial content framework for enhanced description generation
 
-### Step 5: Content Enhancement
-- **Process**: YouTube content is used as additional context
-- **Purpose**: Combines video summary with external content research
-- **Output**: Enhanced title and description generation using expanded context
+**Description**: The AI agent leverages the complete video transcript to perform deep content analysis, extracting the core themes and subject matter to create both a comprehensive summary and strategic search terms. This process involves natural language processing to identify the most relevant and searchable topics that would lead users to discover similar content on YouTube. The agent specifically focuses on generating search terms that mirror actual user search behavior, ensuring the terms will yield relevant competitive content for analysis. Key points include transcript analysis for topic extraction, search term optimization for YouTube discoverability, content summarization for context preservation, and strategic keyword selection based on video subject matter.
 
-### Step 6: Thumbnail Generation
+### Step 5: YouTube Content Research & Data Collection
+- **Function**: Automated YouTube content discovery using generated search terms
+- **API Integration**: YouTube Data API v3 for systematic content research
+- **Process**: 
+  - **Search Execution**: Uses AI-generated search terms to query YouTube's database
+  - **Result Analysis**: Identifies top-performing videos (high view counts, engagement metrics)
+  - **Content Scraping**: Extracts titles, descriptions, view counts, and engagement data from top results
+  - **Data Aggregation**: Compiles research data for content optimization insights
+- **Input**: Search terms from Step 4
+- **Output**: 
+  - Curated list of high-performing videos in the same content category
+  - Extracted titles and descriptions from successful videos
+  - Performance metrics (views, likes, engagement rates)
+  - Competitive analysis data for content optimization
+
+### Step 6: Enhanced Content Generation & Optimization
+- **Process**: Advanced content creation using multi-source context analysis
+- **Data Integration**: Combines video summary (Step 4) with YouTube research data (Step 5)
+- **AI Enhancement Strategy**: 
+  - **Title Optimization**: Analyzes high-performing video titles to identify engagement patterns
+  - **Description Enhancement**: Uses successful video descriptions as templates while maintaining original content authenticity
+  - **SEO Integration**: Incorporates trending keywords and phrases from top-performing similar content
+  - **Click-Through Optimization**: Generates titles and descriptions designed to maximize user engagement based on proven successful patterns
+- **Input**: Video summary + YouTube competitive research data
+- **Output**: 
+  - Optimized video title designed for maximum discoverability and engagement
+  - Enhanced video description incorporating successful content strategies
+  - SEO-optimized content that balances originality with proven engagement patterns
+
+### Step 7: Thumbnail Generation
 - **Process**: All collected context is used to generate 3 different thumbnails
 - **Feature**: Uses pretrained thumbnail styles for variety
 - **Output**: Multiple thumbnail options with different visual approaches
