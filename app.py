@@ -1,13 +1,11 @@
 import gradio as gr
 import os
-import tempfile
-
+import modal
 # Try to import and connect to Modal, but gracefully handle if not available
 MODAL_AVAILABLE = False
-modal_app = None
+
 
 try:
-    import modal
     # Import the deployed functions using Modal's Function.from_name method
     process_video_to_audio = modal.Function.from_name("youtube-content-optimizer", "process_video_to_audio")
     transcribe_audio_with_whisper = modal.Function.from_name("youtube-content-optimizer", "transcribe_audio_with_whisper")
