@@ -8,8 +8,8 @@ modal_app = None
 
 try:
     import modal
-    # Try to get Modal credentials from environment or local config
-    modal_app = modal.App.lookup("youtube-content-optimizer", create_if_missing=False)
+    # Import the deployed function using Modal's Function.from_name method
+    process_video_to_audio = modal.Function.from_name("youtube-content-optimizer", "process_video_to_audio")
     MODAL_AVAILABLE = True
     print("✅ Modal connection established!")
 except Exception as e:
@@ -39,8 +39,7 @@ def process_video(video_file):
             
             print(f"📤 Sending video to Modal for processing...")
             
-            # Call the deployed Modal function directly
-            process_video_to_audio = modal_app.process_video_to_audio
+            # Call the deployed Modal function using the proper method
             audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
             
             status = f"✅ Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)"
@@ -93,10 +92,13 @@ def test_modal_connection():
         return True
         
     try:
-        # Simple connection test - just check if we can access the app
-        process_video_to_audio = modal_app.process_video_to_audio
-        print("✅ Modal app connection successful!")
-        return True
+        # Simple connection test - check if we can access the function
+        if hasattr(process_video_to_audio, 'remote'):
+            print("✅ Modal app connection successful!")
+            return True
+        else:
+            print("❌ Modal function not found")
+            return False
     except Exception as e:
         print(f"❌ Modal connection error: {e}")
         return False
