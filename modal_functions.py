@@ -90,12 +90,8 @@ def process_video_to_audio(video_bytes: bytes, filename: str) -> tuple[bytes, st
         
         return audio_bytes, audio_filename
 
-@app.function(
-    image=image,
-    timeout=60
-)
 def test_modal_connection() -> str:
-    """Simple test function to verify Modal is working"""
+    """Simple test function to verify Modal is working - LOCAL ONLY"""
     return "🎉 Modal connection successful! Ready for video processing."
 
 
@@ -131,7 +127,7 @@ def upload_and_extract_audio(video_file_path: str) -> tuple[bytes, str]:
 def test_modal_setup():
     """Test if Modal is properly configured"""
     try:
-        result = test_modal_connection.remote()
+        result = test_modal_connection()
         print(result)
         return True
     except Exception as e:

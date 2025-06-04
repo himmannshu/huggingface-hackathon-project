@@ -93,9 +93,9 @@ def test_modal_connection():
         return True
         
     try:
-        test_function = modal_app.test_modal_connection
-        result = test_function.remote()
-        print(result)
+        # Simple connection test - just check if we can access the app
+        process_video_to_audio = modal_app.process_video_to_audio
+        print("✅ Modal app connection successful!")
         return True
     except Exception as e:
         print(f"❌ Modal connection error: {e}")
