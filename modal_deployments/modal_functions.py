@@ -3,6 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
+
 # Create Modal app
 app = modal.App("youtube-content-optimizer")
 
@@ -175,55 +176,3 @@ def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str) -> di
         
         return transcription_data
 
-def test_modal_connection() -> str:
-    """Simple test function to verify Modal is working - LOCAL ONLY"""
-    return "🎉 Modal connection successful! Ready for video processing."
-
-
-# Local function to call Modal (for use in Gradio)
-def upload_and_extract_audio(video_file_path: str) -> tuple[bytes, str]:
-    """
-    Local function that calls the Modal function
-    
-    Args:
-        video_file_path: Path to uploaded video file
-        
-    Returns:
-        tuple: (audio_bytes, audio_filename)
-    """
-    
-    if not video_file_path or not os.path.exists(video_file_path):
-        raise ValueError("Invalid video file path")
-    
-    # Read video file
-    with open(video_file_path, "rb") as f:
-        video_bytes = f.read()
-    
-    filename = os.path.basename(video_file_path)
-    
-    # Call Modal function
-    print(f"📤 Sending video to Modal for processing...")
-    audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
-    
-    return audio_bytes, audio_filename
-
-
-# Test function for local development
-def test_modal_setup():
-    """Test if Modal is properly configured"""
-    try:
-        result = test_modal_connection()
-        print(result)
-        return True
-    except Exception as e:
-        print(f"❌ Modal setup error: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    # Test Modal setup when run directly
-    print("🧪 Testing Modal setup...")
-    if test_modal_setup():
-        print("✅ Modal is ready for video processing!")
-    else:
-        print("❌ Modal setup needs attention") 
