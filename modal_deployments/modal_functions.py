@@ -210,11 +210,19 @@ def generate_thumbnails(
         optimized_title: Optimized title from enhancement agent
         optimized_description: Optimized description from enhancement agent  
         search_terms: Search terms from content analysis
-        competitive_analysis: Research data from YouTube analysis
+        competitive_analysis: Research data from YouTube analysis (currently unused in prompt gen)
         
     Returns:
         list: List of thumbnail image data (base64 encoded)
     """
+    
+    print("--- generate_thumbnails INPUTS ---")
+    print(f"Optimized Title: {optimized_title}")
+    print(f"Video Summary (first 100 chars): {video_summary[:100] if video_summary else 'N/A'}...")
+    print(f"Optimized Description (first 100 chars): {optimized_description[:100] if optimized_description else 'N/A'}...")
+    print(f"Search Terms: {search_terms}")
+    print(f"Competitive Analysis (keys): {list(competitive_analysis.keys()) if competitive_analysis else 'N/A'}")
+    print("------------------------------------")
     
     print(f"🎨 Starting thumbnail generation for: {optimized_title[:50]}...")
     
@@ -240,129 +248,208 @@ def generate_thumbnails(
     pipe.enable_attention_slicing()
     print("✅ Stable Diffusion XL model loaded successfully!")
     
-    def extract_key_concepts(text: str) -> list:
-        """Extract key visual concepts from text content"""
+    def extract_key_concepts(title: str, summary: str, search_terms: list) -> list:
+        """Extract key visual concepts from video content for thumbnail generation."""
         
-        # Technology/product terms that make good visual elements
-        tech_keywords = [
-            "AI", "machine learning", "technology", "software", "coding", "programming",
-            "data", "analytics", "cloud", "mobile", "web", "app", "digital",
-            "MacBook", "iPhone", "computer", "laptop", "smartphone", "gadget",
-            "tutorial", "guide", "tips", "review", "comparison", "vs"
+        # Expanded visual keywords (mix of tech, action, objects, concepts)
+        visual_keywords = [
+            "AI", "robot", "code", "data", "chart", "graph", "future", "brain", "learn", "build", "create", "discover",
+            "secret", "hack", "tutorial", "guide", "tips", "review", "comparison", "vs", "new", "update",
+            "technology", "software", "programming", "analytics", "cloud", "mobile", "web", "app", "digital",
+            "MacBook", "iPhone", "computer", "laptop", "smartphone", "gadget", "device", "screen",
+            "money", "success", "growth", "business", "marketing", "idea", "lightbulb",
+            "gaming", "game", "virtual reality", "VR", "metaverse",
+            "person", "man", "woman", "developer", "creator", "youtuber", "student", "teacher",
+            "problem", "solution", "challenge", "journey", "story", "magic", "power"
         ]
+        # Lowercase version for efficient checking
+        lower_visual_keywords = [kw.lower() for kw in visual_keywords]
         
-        # Action/engagement words for dynamic thumbnails
-        action_keywords = [
-            "learn", "build", "create", "master", "discover", "unlock", "reveal",
-            "secret", "hack", "trick", "method", "strategy", "solution", "fix"
-        ]
-        
-        # Extract concepts from the text
         concepts = []
-        text_lower = text.lower()
-        
-        # Find tech/product concepts
-        for keyword in tech_keywords:
-            if keyword.lower() in text_lower:
+        # Combine all text sources for keyword spotting
+        full_content_text = f"{title.lower()} {summary.lower()} {' '.join(search_terms).lower()}"
+
+        for keyword in visual_keywords: # Iterate original to preserve casing for concepts list
+            if keyword.lower() in full_content_text:
                 concepts.append(keyword)
         
-        # Find action concepts  
-        for keyword in action_keywords:
-            if keyword.lower() in text_lower:
-                concepts.append(keyword)
+        # Extract capitalized phrases from title and summary as potential specific subjects/products
+        title_caps = re.findall(r'\b[A-Z][a-zA-Z0-9]*(?:\s+[A-Z][a-zA-Z0-9]*)*\b', title)
+        summary_caps = re.findall(r'\b[A-Z][a-zA-Z0-9]*(?:\s+[A-Z][a-zA-Z0-9]*)*\b', summary)
         
-        # Extract quoted terms and capitalize words that might be products/concepts
-        words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
-        concepts.extend(words[:3])  # Add up to 3 capitalized terms
+        for cap_phrase in title_caps + summary_caps:
+            # Check if it's not already added, not a generic keyword itself, and has some length
+            if cap_phrase not in concepts and cap_phrase.lower() not in lower_visual_keywords and len(cap_phrase) > 2:
+                concepts.append(cap_phrase)
+
+        # Fallback: add some terms from title if concepts list is still small and title is available
+        if not concepts and title:
+            # A simple list of common English stop words
+            stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being", 
+                          "have", "has", "had", "do", "does", "did", "will", "would", "should", 
+                          "can", "could", "may", "might", "must", "and", "but", "or", "nor", 
+                          "for", "so", "yet", "in", "on", "at", "by", "from", "to", "with", "about",
+                          "of", "how", "what", "when", "where", "why", "which", "my", "your", "its"}
+            title_words = [word for word in title.split() if len(word) > 3 and word.lower() not in stop_words]
+            concepts.extend(title_words[:3]) # Add first few meaningful words from title
+
+        # Remove duplicates while preserving order and limit
+        unique_concepts_ordered = []
+        seen_concepts = set()
+        for concept in concepts:
+            if concept.lower() not in seen_concepts:
+                unique_concepts_ordered.append(concept)
+                seen_concepts.add(concept.lower())
+        return unique_concepts_ordered[:10]
+
+    def generate_thumbnail_prompt(
+        style: str, 
+        video_title_for_overlay: str, 
+        video_summary_for_cue: str, 
+        concepts: list,
+        original_video_title_for_context: str
+    ) -> tuple[str, str]:
+        """Generate optimized prompts for viral YouTube thumbnails with text overlays."""
         
-        return list(set(concepts))[:8]  # Return unique concepts, max 8
-    
-    def generate_thumbnail_prompt(style: str, title: str, summary: str, concepts: list) -> str:
-        """Generate optimized prompts for viral YouTube thumbnails"""
-        
-        # Base style definitions for different thumbnail approaches
         style_templates = {
             "dynamic": {
-                "base": "high-energy YouTube thumbnail, dynamic composition, bright vibrant colors, ",
-                "elements": "dramatic lighting, action-oriented, bold text overlay space, ",
-                "quality": "professional photography style, studio lighting, 8K resolution, trending on YouTube"
+                "base": "High-energy YouTube thumbnail, dynamic composition, vibrant contrasting colors, modern graphic elements, ",
+                "elements": "action lines, particle effects, glowing highlights, prominent space for bold text overlay, ",
+                "quality": "professional digital art, studio quality, 8K resolution, trending on ArtStation, eye-catching"
             },
             "tech_modern": {
-                "base": "modern tech YouTube thumbnail, sleek minimalist design, gradient backgrounds, ",
-                "elements": "glowing tech elements, clean typography space, modern UI design, ",
-                "quality": "professional digital art, high contrast, sharp details, premium look"
+                "base": "Sleek modern tech YouTube thumbnail, minimalist and futuristic design, gradient background with subtle abstract patterns, ",
+                "elements": "holographic projections, glowing circuits or icons, clean typography area for text overlay, UI elements, ",
+                "quality": "high-tech digital illustration, sharp focus, cinematic lighting, premium and sophisticated feel"
             },
             "educational": {
-                "base": "educational YouTube thumbnail, friendly approachable style, warm colors, ",
-                "elements": "clear focal point, teaching elements, infographic style, organized layout, ",
-                "quality": "professional illustration, clean design, high readability, engaging"
+                "base": "Engaging educational YouTube thumbnail, clear and inviting visual style, bright and warm color palette, ",
+                "elements": "iconography representing key concepts, simplified diagrams, organized layout for clarity, visual metaphor for learning, space for informative text overlay, ",
+                "quality": "professional illustration, high readability, friendly and approachable, conveys information effectively"
+            },
+            "cinematic_story": {
+                "base": "Dramatic cinematic storytelling YouTube thumbnail, rich color grading, epic lighting, movie poster aesthetic, ",
+                "elements": "compelling central figure or iconic object, evocative scene hinting at a narrative, sense of depth and scale, high emotional impact, area for stylized text overlay, ",
+                "quality": "photorealistic rendering, epic composition, highly detailed, blockbuster movie visual quality, 8K"
             }
         }
         
         style_config = style_templates.get(style, style_templates["dynamic"])
         
-        # Extract main subject from title and concepts
-        main_subject = "content creator"
+        main_subject = "a key visual element related to the video" # Default
         if concepts:
-            # Prioritize tech/product terms for main subject
-            tech_terms = [c for c in concepts if c.lower() in ["ai", "macbook", "iphone", "computer", "laptop", "technology"]]
-            if tech_terms:
-                main_subject = tech_terms[0]
+            # Prefer non-generic, more specific concepts as main subject
+            potential_subjects = [c for c in concepts if c.lower() not in ["tutorial", "guide", "review", "vs", "new", "update", "tips", "secret", "hack"]]
+             # Prioritize capitalized concepts if available, or longer ones
+            capitalized_subjects = [s for s in potential_subjects if any(char.isupper() for char in s)]
+            if capitalized_subjects:
+                 main_subject = capitalized_subjects[0]
+            elif potential_subjects:
+                main_subject = sorted(potential_subjects, key=len, reverse=True)[0] # Pick longest potential subject
             else:
-                main_subject = concepts[0] if concepts else "content creator"
+                main_subject = concepts[0] # Fallback to first concept
+        elif original_video_title_for_context:
+            stop_words_for_title = {"a", "the", "is", "of", "for", "how", "to", "and", "with", "my", "your", "in", "on", "what", "why"}
+            title_words = [w for w in original_video_title_for_context.split() if w.lower() not in stop_words_for_title]
+            if title_words:
+                main_subject_candidate = ' '.join(title_words[:3]) # take first few significant words
+                if len(main_subject_candidate) > 2: 
+                    main_subject = f'"{main_subject_candidate}"'
+
+
+        # Prepare text for overlay from video_title_for_overlay
+        overlay_text_words = video_title_for_overlay.split()
+        overlay_text = video_title_for_overlay # Default to full title
+        if len(overlay_text_words) > 6: # If title is long, try to pick a catchy part
+            catchy_keywords = ["new", "secret", "best", "top", "easy", "fast", "ultimate", "guide", "tutorial", "hack"]
+            catchy_part = ""
+            for i, word in enumerate(overlay_text_words):
+                if word.lower() in catchy_keywords or (word.isdigit() and i > 0):
+                    # Try to get a phrase around the keyword/number
+                    start_index = max(0, i - 1 if overlay_text_words[i-1].lower() != "a" else i - 2) # Avoid starting with "a"
+                    end_index = min(len(overlay_text_words), i + 2)
+                    phrase = " ".join(overlay_text_words[start_index:end_index])
+                    if len(phrase.split()) <= 4 : # Keep it short
+                        catchy_part = phrase
+                        break
+            if catchy_part:
+                overlay_text = catchy_part
+            else: # Fallback to first 3-4 words if no catchy part found or title very long
+                overlay_text = " ".join(overlay_text_words[:4])
         
-        # Build the prompt
+        overlay_text = overlay_text.strip().replace('"', '').replace("'", "")[:60] # Clean up, limit length
+
+        # Visual cue from video_summary_for_cue
+        summary_cue = ""
+        if video_summary_for_cue:
+            first_sentence = video_summary_for_cue.split('.')[0].strip()
+            if 10 < len(first_sentence) < 150 : # Ensure it's a meaningful, concise sentence part
+                 summary_cue = f"Visually hinting at content like: '{first_sentence[:80]}...'. "
+        
         prompt_parts = [
+            f"Design an ultra-detailed, highly engaging YouTube thumbnail for a video titled \"{original_video_title_for_context}\". ",
             style_config["base"],
-            f"featuring {main_subject}, ",
+            f"The main visual focus must be {main_subject}. ",
+            summary_cue,
+            f"Subtly incorporate visual themes or objects related to: {(', '.join(concepts[:3]) if concepts else 'the video topic')}. ",
             style_config["elements"],
-            f"theme: {' '.join(concepts[:3]) if concepts else 'technology'}, ",
-            "YouTube thumbnail format, 16:9 aspect ratio, ",
-            "compelling visual hook, clickbait style, ",
+            "The thumbnail MUST be 16:9 aspect ratio. It needs to be designed to maximize click-through rates using a powerful visual hook. ",
+            f"Artistically integrate the text \"{overlay_text}\" into the thumbnail design. The text must be very prominent, extremely clear, easily readable, and stylishly composed with the overall visual aesthetics. Use bold, impactful fonts and strong contrasting colors for the text to ensure it stands out. ",
             style_config["quality"]
         ]
         
-        # Add specific elements based on content
-        if "tutorial" in title.lower() or "how to" in title.lower():
-            prompt_parts.insert(-1, "tutorial elements, step-by-step visual, ")
-        
-        if "review" in title.lower() or "vs" in title.lower():
-            prompt_parts.insert(-1, "comparison elements, product showcase, ")
-        
-        if any(word in title.lower() for word in ["secret", "hidden", "trick", "hack"]):
-            prompt_parts.insert(-1, "mysterious elements, revealed content hint, ")
-        
+        title_lower = original_video_title_for_context.lower()
+        if "tutorial" in title_lower or "how to" in title_lower or "guide" in title_lower:
+            prompt_parts.append("Visually convey a sense of learning, step-by-step instruction, or a practical guide. ")
+        if "review" in title_lower or "vs" in title_lower or "comparison" in title_lower:
+            prompt_parts.append("Clearly showcase product(s) or elements being compared. ")
+        if any(word in title_lower for word in ["secret", "hidden", "reveal", "exposed", "hack", "trick", "unlock"]):
+            prompt_parts.append("Create an aura of mystery, discovery, or a surprising revelation in the visuals. ")
+
         full_prompt = "".join(prompt_parts)
         
-        # Negative prompt to avoid unwanted elements
         negative_prompt = (
-            "text, watermarks, logos, signatures, blurry, low quality, "
-            "oversaturated, distorted faces, multiple people, crowded composition, "
-            "dark lighting, unclear subject, messy background"
+            "text that is too small, unreadable text, poorly rendered text, illegible text, distorted text, text with bad kerning, text not integrated well, "
+            "watermarks, author signatures, channel logos (unless explicitly part of the main subject described), "
+            "blurry, low resolution, noisy, grainy, pixelated, artifacts, jpeg compression, "
+            "oversaturated, undersaturated, flat lighting, dark or muddy visuals, unclear subject, "
+            "messy background, tiling patterns, out of frame elements, cut-off subjects, "
+            "boring, generic, ugly, amateurish, poorly composed, too much empty space, "
+            "extra limbs, missing limbs, mutated hands, bad hands, malformed fingers, poorly drawn hands, poorly drawn faces, distorted anatomy, "
+            "multiple panels, collage style, screenshot, low effort"
         )
         
         return full_prompt, negative_prompt
-    
+
     # Extract key concepts from all available content
-    all_content = f"{optimized_title} {video_summary} {' '.join(search_terms)}"
-    key_concepts = extract_key_concepts(all_content)
+    print(f"🔄 Extracting key concepts for: {optimized_title[:50]}...")
+    key_concepts = extract_key_concepts(
+        title=optimized_title, 
+        summary=video_summary, 
+        search_terms=search_terms
+    )
     
     print(f"🎯 Key concepts for thumbnails: {key_concepts}")
     
-    # Generate 3 different thumbnail styles
-    thumbnail_styles = ["dynamic", "tech_modern", "educational"]
+    # Generate 4 different thumbnail styles
+    thumbnail_styles = ["dynamic", "tech_modern", "educational", "cinematic_story"]
     thumbnails = []
     
     for i, style in enumerate(thumbnail_styles):
-        print(f"🎨 Generating thumbnail {i+1}/3 - {style} style...")
+        print(f"🎨 Generating thumbnail {i+1}/{len(thumbnail_styles)} - Style: {style}...")
         
         try:
             # Generate prompt for this style
             prompt, negative_prompt = generate_thumbnail_prompt(
-                style, optimized_title, video_summary, key_concepts
+                style=style,
+                video_title_for_overlay=optimized_title, 
+                video_summary_for_cue=video_summary,
+                concepts=key_concepts,
+                original_video_title_for_context=optimized_title
             )
             
-            print(f"📝 Prompt: {prompt[:100]}...")
+            print(f"📝 Full Prompt ({style}): {prompt}") 
+            print(f"🚫 Full Negative Prompt: {negative_prompt}")
             
             # Generate image
             image = pipe(
@@ -377,17 +464,19 @@ def generate_thumbnails(
             
             # Convert to base64 for return
             buffer = io.BytesIO()
-            image.save(buffer, format="PNG", quality=95)
+            image.save(buffer, format="PNG", quality=95, compress_level=1) 
+            
             image_b64 = base64.b64encode(buffer.getvalue()).decode()
             
             thumbnails.append({
                 "style": style,
                 "image_data": image_b64,
-                "prompt_used": prompt[:200] + "...",  # Store truncated prompt for debugging
-                "concepts": key_concepts
+                "prompt_used": prompt, # Store full prompt
+                "concepts": key_concepts,
+                "negative_prompt_used": negative_prompt # Store negative prompt
             })
             
-            print(f"✅ Thumbnail {i+1}/3 generated successfully!")
+            print(f"✅ Thumbnail {i+1}/{len(thumbnail_styles)} generated successfully!")
             
         except Exception as e:
             print(f"❌ Error generating thumbnail {i+1}: {e}")
@@ -396,7 +485,9 @@ def generate_thumbnails(
                 "style": style,
                 "image_data": None,
                 "error": str(e),
-                "concepts": key_concepts
+                "concepts": key_concepts,
+                "prompt_that_failed": prompt if 'prompt' in locals() else "Prompt not generated",
+                "negative_prompt_that_failed": negative_prompt if 'negative_prompt' in locals() else "Negative prompt not generated"
             })
     
     print(f"🎉 Thumbnail generation complete! Generated {len([t for t in thumbnails if t.get('image_data')])} successful thumbnails")
