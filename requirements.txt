@@ -4,3 +4,4 @@ llama-index
 llama-index-llms-ollama
 llama-index-llms-openai
 python-dotenv
+google-api-python-client==2.100.0

@@ -26,9 +26,6 @@ except Exception as e:
 try:
     from agents.content_analysis_agent import ContentAnalysisAgent
     STEP4_AGENT_AVAILABLE = True
-    # Instantiate the agent. This will also initialize LlamaIndex for Ollama on instantiation.
-    # We will do this conditionally later based on whether Modal is running or not,
-    # to avoid initializing Ollama if Modal will handle Step 4.
     content_analyzer = None 
     print("✅ Step 4 (ContentAnalysisAgent) class loaded.")
 except ImportError as e:
@@ -46,35 +43,140 @@ except ImportError as e:
             }
     content_analyzer = ContentAnalysisAgent() # Instantiate dummy for safety
 
-# Initialize ContentAnalysisAgent for local use if Step 4 is available and Modal is not
-# This agent will handle its own LlamaIndex Ollama initialization.
-if STEP4_AGENT_AVAILABLE and not MODAL_AVAILABLE:
-    try:
-        print("🔄 Initializing ContentAnalysisAgent for local Step 4 processing...")
-        content_analyzer = ContentAnalysisAgent()
-        print("✅ ContentAnalysisAgent initialized for local use.")
-    except Exception as e:
-        print(f"⚠️ Error initializing ContentAnalysisAgent for local Step 4: {e}. Step 4 might fail.")
-        # Fallback to dummy if initialization fails
-        if not isinstance(content_analyzer, ContentAnalysisAgent) or content_analyzer is None:
-            class ContentAnalysisAgent_Dummy:
-                def __init__(self):
-                    print("Fallback Dummy ContentAnalysisAgent initialized after error.")
-                def analyze_transcript(self, transcript: str):
-                    return {"video_summary": "[Content analysis agent failed to initialize]", "search_terms": []}
-            content_analyzer = ContentAnalysisAgent_Dummy()
+# Attempt to import Step 5 Agent (YouTube Research)
+try:
+    from agents.youtube_research_agent import YouTubeResearchAgent
+    STEP5_AGENT_AVAILABLE = True
+    youtube_researcher = None
+    print("✅ Step 5 (YouTubeResearchAgent) class loaded.")
+except ImportError as e:
+    print(f"⚠️ Step 5 Agent (agents.youtube_research_agent) not found or import error: {e}. YouTube research will be skipped.")
+    STEP5_AGENT_AVAILABLE = False
+    youtube_researcher = None
+
+# Attempt to import Step 6 Agent (Content Enhancement)
+try:
+    from agents.content_enhancement_agent import ContentEnhancementAgent
+    STEP6_AGENT_AVAILABLE = True
+    content_enhancer = None
+    print("✅ Step 6 (ContentEnhancementAgent) class loaded.")
+except ImportError as e:
+    print(f"⚠️ Step 6 Agent (agents.content_enhancement_agent) not found or import error: {e}. Content enhancement will be skipped.")
+    STEP6_AGENT_AVAILABLE = False
+    content_enhancer = None
+
+# Initialize agents for local use if Modal is not available
+if not MODAL_AVAILABLE:
+    # Initialize ContentAnalysisAgent
+    if STEP4_AGENT_AVAILABLE:
+        try:
+            print("🔄 Initializing ContentAnalysisAgent for local Step 4 processing...")
+            content_analyzer = ContentAnalysisAgent()
+            print("✅ ContentAnalysisAgent initialized for local use.")
+        except Exception as e:
+            print(f"⚠️ Error initializing ContentAnalysisAgent for local Step 4: {e}. Step 4 might fail.")
+            # Fallback to dummy if initialization fails
+            if not isinstance(content_analyzer, ContentAnalysisAgent) or content_analyzer is None:
+                class ContentAnalysisAgent_Dummy:
+                    def __init__(self):
+                        print("Fallback Dummy ContentAnalysisAgent initialized after error.")
+                    def analyze_transcript(self, transcript: str):
+                        return {"video_summary": "[Content analysis agent failed to initialize]", "search_terms": []}
+                content_analyzer = ContentAnalysisAgent_Dummy()
+    
+    # Initialize YouTubeResearchAgent
+    if STEP5_AGENT_AVAILABLE:
+        try:
+            print("🔄 Initializing YouTubeResearchAgent for Step 5 processing...")
+            youtube_researcher = YouTubeResearchAgent()
+            print("✅ YouTubeResearchAgent initialized.")
+        except Exception as e:
+            print(f"⚠️ Error initializing YouTubeResearchAgent: {e}. Step 5 will be skipped.")
+            youtube_researcher = None
+    
+    # Initialize ContentEnhancementAgent
+    if STEP6_AGENT_AVAILABLE:
+        try:
+            print("🔄 Initializing ContentEnhancementAgent for Step 6 processing...")
+            content_enhancer = ContentEnhancementAgent()
+            print("✅ ContentEnhancementAgent initialized.")
+        except Exception as e:
+            print(f"⚠️ Error initializing ContentEnhancementAgent: {e}. Step 6 will be skipped.")
+            content_enhancer = None
+
+def format_youtube_research_results(research_data: dict, search_terms: list) -> str:
+    """
+    Format YouTube research results for display in the UI.
+    
+    Args:
+        research_data: Research data from YouTubeResearchAgent
+        search_terms: Original search terms used
+        
+    Returns:
+        Formatted string for UI display
+    """
+    if not research_data or not search_terms:
+        return "No research data available."
+    
+    result = f"🔍 Search Terms Used: {', '.join(search_terms)}\n\n"
+    
+    # Research summary
+    summary = research_data.get("research_summary", {})
+    result += f"📊 RESEARCH SUMMARY:\n"
+    result += f"• Total videos analyzed: {summary.get('total_videos_analyzed', 0)}\n"
+    result += f"• Search terms researched: {summary.get('total_search_terms', 0)}\n\n"
+    
+    # Competitive analysis
+    analysis = research_data.get("competitive_analysis", {})
+    if analysis:
+        result += f"📈 COMPETITIVE INSIGHTS:\n"
+        result += f"• Average views: {analysis.get('average_views', 0):,}\n"
+        result += f"• Average engagement rate: {analysis.get('average_engagement_rate', 0):.2f}%\n\n"
+        
+        # Top performing videos
+        top_videos = analysis.get("top_performing_videos", [])
+        if top_videos:
+            result += f"🏆 TOP PERFORMING VIDEOS (used as optimization context):\n"
+            for i, video in enumerate(top_videos[:3], 1):
+                result += f"{i}. \"{video.get('title', 'N/A')}\" - {video.get('views', 0):,} views ({video.get('engagement_rate', 0):.2f}% engagement)\n"
+            result += "\n"
+        
+        # Common keywords
+        keywords = analysis.get("common_title_words", [])
+        if keywords:
+            result += f"🎯 TRENDING KEYWORDS (incorporated in optimization):\n"
+            result += f"• {', '.join(keywords[:8])}\n\n"
+    
+    # Per-term results
+    term_results = research_data.get("term_results", {})
+    if term_results:
+        result += f"📋 DETAILED RESULTS BY SEARCH TERM:\n"
+        for term, data in term_results.items():
+            videos = data.get("videos", [])
+            result += f"\n🔸 '{term}' - {len(videos)} videos found:\n"
+            for i, video in enumerate(videos[:3], 1):
+                title = video.get('title', 'N/A')
+                views = video.get('view_count', 0)
+                channel = video.get('channel_name', 'Unknown')
+                result += f"   {i}. {title[:60]}{'...' if len(title) > 60 else ''}\n"
+                result += f"      📺 {channel} | 👁 {views:,} views\n"
+    
+    result += f"\n✨ This data was used to optimize your title and description using AI analysis of trending content!"
+    
+    return result
 
 def process_video(video_file):
     """
     Main processing function for the video content optimization pipeline.
     Steps 1-3: Video upload, audio extraction, and Whisper transcription via Modal
     Step 4: Content Analysis (Summary & Search Terms) using ContentAnalysisAgent
-    Steps 5-6: To be implemented (YouTube research, enhanced content, thumbnails)
+    Step 5: YouTube Research & Competitive Analysis using YouTubeResearchAgent
+    Step 6: Content Enhancement (Optimized Titles & Descriptions) using ContentEnhancementAgent
     """
-    global content_analyzer # Make sure we're using the potentially initialized agent
+    global content_analyzer, youtube_researcher, content_enhancer # Access all agents
 
     if video_file is None:
-        return "Please upload a video file.", "", "", "", None, None, None
+        return "Please upload a video file.", "", "", "", "", "", None, None, None
     
     try:
         if MODAL_AVAILABLE:
@@ -104,22 +206,15 @@ def process_video(video_file):
             duration = transcription_data["duration"]
             word_count = transcription_data["word_count"]
             
-            status = f"✅ Step 3/4: Transcription complete! Lang: {language.upper()}, Duration: {duration:.1f}s, Words: {word_count}\n🔄 Step 4/4: Analyzing content for summary and search terms..."
+            status = f"✅ Step 3/6: Transcription complete! Lang: {language.upper()}, Duration: {duration:.1f}s, Words: {word_count}\n🔄 Step 4/6: Analyzing content for summary and search terms..."
             
             # Step 4: AI Agent Content Analysis & Search Term Generation
-            # If Step 4 were a Modal function, it would be called here.
-            # For now, if MODAL_AVAILABLE, we assume Step 4 might still run locally 
-            # (e.g. app.py is hosted on Modal, but calls a local agent for Step 4)
-            # OR that ContentAnalysisAgent is designed to be part of a Modal deployment itself.
-            # This part needs clarification if Step 4 should *also* be a Modal remote call.
-            # Assuming for now it uses the globally available `content_analyzer` instance
-            # which would be configured based on where app.py runs.
             video_summary = "[Step 4 analysis not run in Modal flow yet]"
             search_terms = []
 
             if STEP4_AGENT_AVAILABLE:
                 if content_analyzer is None:
-                    print("Attempting to initialize ContentAnalysisAgent for Modal context (should be pre-initialized ideally)")
+                    print("Attempting to initialize ContentAnalysisAgent for Modal context...")
                     try:
                         content_analyzer = ContentAnalysisAgent()
                     except Exception as e_agent_init:
@@ -130,25 +225,102 @@ def process_video(video_file):
                                 return {"video_summary": "[Content analysis agent failed to initialize in Modal]", "search_terms": []}
                         content_analyzer = ContentAnalysisAgent_Dummy_Modal()
                 
-                # Ensure content_analyzer is not None before calling (it should be an instance)
+                # Ensure content_analyzer is not None before calling
                 if hasattr(content_analyzer, 'analyze_transcript'):
                     analysis_results = content_analyzer.analyze_transcript(transcript_text)
                     video_summary = analysis_results["video_summary"]
                     search_terms = analysis_results["search_terms"]
-                    status += f"\n✅ Step 4/4: Content analysis complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
+                    status += f"\n✅ Step 4/6: Content analysis complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
                 else:
-                    status += "\n⚠️ Step 4/4: Content analysis agent not properly initialized."
+                    status += "\n⚠️ Step 4/6: Content analysis agent not properly initialized."
             else:
-                status += "\n⚠️ Step 4/4: Content analysis skipped (agent not available)."
+                status += "\n⚠️ Step 4/6: Content analysis skipped (agent not available)."
             
-            title = f"Generated Title: [Step 5 & 6 needed - Search Terms: {', '.join(search_terms) if search_terms else 'N/A'}]"
-            description = f"Video Summary (Step 4):\n{video_summary}\n\n[Step 5 & 6 needed for final description based on summary and research]"
+            # Step 5: YouTube Research & Competitive Analysis
+            research_data = {}
+            if STEP5_AGENT_AVAILABLE and search_terms:
+                status += f"\n🔄 Step 5/6: Researching competitive content on YouTube..."
+                
+                if youtube_researcher is None:
+                    try:
+                        youtube_researcher = YouTubeResearchAgent()
+                    except Exception as e:
+                        print(f"Error initializing YouTubeResearchAgent: {e}")
+                        youtube_researcher = None
+                
+                if youtube_researcher:
+                    try:
+                        research_data = youtube_researcher.research_competitive_content(search_terms)
+                        videos_analyzed = research_data["research_summary"]["total_videos_analyzed"]
+                        avg_views = research_data["competitive_analysis"]["average_views"]
+                        status += f"\n✅ Step 5/6: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
+                    except Exception as e:
+                        print(f"Error during YouTube research: {e}")
+                        status += f"\n❌ Step 5/6: YouTube research failed: {str(e)}"
+                        research_data = {}
+                else:
+                    status += "\n⚠️ Step 5/6: YouTube research skipped (agent initialization failed)."
+            elif not search_terms:
+                status += "\n⚠️ Step 5/6: YouTube research skipped (no search terms from Step 4)."
+            else:
+                status += "\n⚠️ Step 5/6: YouTube research skipped (agent not available)."
+            
+            # Step 6: Content Enhancement (Optimized Titles & Descriptions)
+            optimized_title = f"[Step 6 needed] Video Title - Search Terms: {', '.join(search_terms) if search_terms else 'N/A'}"
+            optimized_description = f"Video Summary (Step 4):\n{video_summary}\n\n[Step 6 needed for final description]"
+            
+            if STEP6_AGENT_AVAILABLE and video_summary:
+                status += f"\n🔄 Step 6/6: Generating optimized content using competitive research..."
+                
+                if content_enhancer is None:
+                    try:
+                        content_enhancer = ContentEnhancementAgent()
+                    except Exception as e:
+                        print(f"Error initializing ContentEnhancementAgent: {e}")
+                        content_enhancer = None
+                
+                if content_enhancer:
+                    try:
+                        enhancement_results = content_enhancer.enhance_content(
+                            video_summary, search_terms, research_data
+                        )
+                        optimized_title = enhancement_results["optimized_title"]
+                        optimized_description = enhancement_results["optimized_description"]
+                        metadata = enhancement_results["enhancement_metadata"]
+                        
+                        status += f"\n✅ Step 6/6: Content enhancement complete!"
+                        status += f"\n📊 Enhancement Stats: {metadata['competitive_videos_analyzed']} videos analyzed, "
+                        status += f"avg competitor views: {metadata['avg_competitor_views']:,}, "
+                        status += f"avg engagement: {metadata['avg_engagement_rate']:.2f}%"
+                        if metadata.get('successful_patterns'):
+                            status += f"\n🎯 Applied patterns: {', '.join(metadata['successful_patterns'][:2])}"
+                        if metadata.get('top_keywords'):
+                            status += f"\n🔑 Key trending words: {', '.join(metadata['top_keywords'][:4])}"
+                    except Exception as e:
+                        print(f"Error during content enhancement: {e}")
+                        status += f"\n❌ Step 6/6: Content enhancement failed: {str(e)}"
+                else:
+                    status += "\n⚠️ Step 6/6: Content enhancement skipped (agent initialization failed)."
+            else:
+                if not video_summary:
+                    status += "\n⚠️ Step 6/6: Content enhancement skipped (no video summary from Step 4)."
+                else:
+                    status += "\n⚠️ Step 6/6: Content enhancement skipped (agent not available)."
+            
+            # Format search terms and research results for UI display
+            search_terms_display = ", ".join(search_terms) if search_terms else "No search terms generated"
+            research_results_display = format_youtube_research_results(research_data, search_terms)
+            
+            title = optimized_title
+            description = optimized_description
             
             return (
                 status,
+                transcript_text,
+                search_terms_display,
+                research_results_display,
                 title,
                 description,
-                transcript_text, 
                 None, 
                 None, 
                 None  
@@ -160,9 +332,9 @@ def process_video(video_file):
             file_size = os.path.getsize(video_file) / (1024*1024) if video_file else 0
             
             status = f"🎭 DEMO MODE: Simulating video processing for {filename} ({file_size:.1f} MB)\n" \
-                    f"✅ Step 1/4: Video upload simulated\n" \
-                    f"✅ Step 2/4: Audio extraction simulated\n" \
-                    f"✅ Step 3/4: Whisper transcription simulated"
+                    f"✅ Step 1/6: Video upload simulated\n" \
+                    f"✅ Step 2/6: Audio extraction simulated\n" \
+                    f"✅ Step 3/6: Whisper transcription simulated"
             
             demo_transcript_full = """🎭 Demo Transcription (Step 3 output):
 
@@ -173,32 +345,82 @@ First, we'll set up our Modal infrastructure with GPU support for running Whispe
 Thank you for watching, and don't forget to subscribe for more AI development tutorials!"""
             demo_transcript_text_only = demo_transcript_full.split(":\n\n", 1)[1] if ":\n\n" in demo_transcript_full else demo_transcript_full
 
-            # Simulate Step 4 using the ContentAnalysisAgent if available (already initialized if not MODAL_AVAILABLE)
+            # Simulate Step 4 using the ContentAnalysisAgent if available
             if STEP4_AGENT_AVAILABLE and content_analyzer and hasattr(content_analyzer, 'analyze_transcript'):
-                status += "\n🔄 Step 4/4: Running local content analysis via agent..."
+                status += "\n🔄 Step 4/6: Running local content analysis via agent..."
                 try:
                     analysis_results = content_analyzer.analyze_transcript(demo_transcript_text_only) 
                     video_summary = analysis_results["video_summary"]
                     search_terms = analysis_results["search_terms"]
-                    status += f"\n✅ Step 4/4: Local content analysis by agent complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
+                    status += f"\n✅ Step 4/6: Local content analysis by agent complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
                 except Exception as e:
                     print(f"❌ Error during local Step 4 agent simulation: {e}")
                     video_summary = "[Error in local Step 4 agent simulation]"
                     search_terms = []
-                    status += f"\n❌ Step 4/4: Local content analysis by agent failed: {e}"
+                    status += f"\n❌ Step 4/6: Local content analysis by agent failed: {e}"
             else:
                 video_summary = "[Content analysis agent (Step 4) would run here if available and initialized]"
                 search_terms = []
-                status += "\n⚠️ Step 4/4: Content analysis by agent skipped (agent not available/initialized)."
+                status += "\n⚠️ Step 4/6: Content analysis by agent skipped (agent not available/initialized)."
 
-            title = f"🎬 Demo Generated Title: (Using Step 4 agent search terms: {', '.join(search_terms) if search_terms else 'N/A'})"
-            description = f"🎭 Demo Generated Description (incorporating Step 4 agent summary):\n\nSummary:\n{video_summary}\n\nThis is a demo of our YouTube Content Optimizer. Steps 5 & 6 will refine this further."
+            # Simulate Step 5: YouTube Research
+            research_data = {}
+            if STEP5_AGENT_AVAILABLE and youtube_researcher and search_terms:
+                status += "\n🔄 Step 5/6: Running YouTube research simulation..."
+                try:
+                    research_data = youtube_researcher.research_competitive_content(search_terms[:1])  # Use first term only for demo
+                    videos_analyzed = research_data["research_summary"]["total_videos_analyzed"]
+                    avg_views = research_data["competitive_analysis"]["average_views"]
+                    status += f"\n✅ Step 5/6: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
+                except Exception as e:
+                    print(f"❌ Error during YouTube research simulation: {e}")
+                    status += f"\n❌ Step 5/6: YouTube research failed: {str(e)}"
+                    research_data = {}
+            else:
+                status += "\n⚠️ Step 5/6: YouTube research skipped (agent not available or no search terms)."
 
+            # Simulate Step 6: Content Enhancement
+            if STEP6_AGENT_AVAILABLE and content_enhancer and video_summary:
+                status += "\n🔄 Step 6/6: Running content enhancement simulation..."
+                try:
+                    enhancement_results = content_enhancer.enhance_content(
+                        video_summary, search_terms, research_data
+                    )
+                    optimized_title = enhancement_results["optimized_title"]
+                    optimized_description = enhancement_results["optimized_description"]
+                    metadata = enhancement_results["enhancement_metadata"]
+                    
+                    status += f"\n✅ Step 6/6: Content enhancement complete!"
+                    status += f"\n📊 Enhancement Stats: {metadata['competitive_videos_analyzed']} videos analyzed, "
+                    status += f"avg engagement: {metadata['avg_engagement_rate']:.2f}%"
+                    if metadata.get('successful_patterns'):
+                        status += f"\n🎯 Applied patterns: {', '.join(metadata['successful_patterns'][:2])}"
+                    if metadata.get('top_keywords'):
+                        status += f"\n🔑 Key trending words: {', '.join(metadata['top_keywords'][:4])}"
+                    
+                    title = f"🎬 {optimized_title}"
+                    description = f"🎭 DEMO MODE - Optimized Content:\n\n{optimized_description}"
+                except Exception as e:
+                    print(f"❌ Error during content enhancement simulation: {e}")
+                    status += f"\n❌ Step 6/6: Content enhancement failed: {str(e)}"
+                    title = f"🎬 Demo Generated Title: (Using Step 4 agent search terms: {', '.join(search_terms) if search_terms else 'N/A'})"
+                    description = f"🎭 Demo Generated Description (incorporating Step 4 agent summary):\n\nSummary:\n{video_summary}\n\nThis is a demo of our YouTube Content Optimizer."
+            else:
+                status += "\n⚠️ Step 6/6: Content enhancement skipped (agent not available or no video summary)."
+                title = f"🎬 Demo Generated Title: (Using Step 4 agent search terms: {', '.join(search_terms) if search_terms else 'N/A'})"
+                description = f"🎭 Demo Generated Description (incorporating Step 4 agent summary):\n\nSummary:\n{video_summary}\n\nThis is a demo of our YouTube Content Optimizer."
+
+            # Format search terms and research results for demo display
+            search_terms_display = ", ".join(search_terms) if search_terms else "No search terms generated"
+            research_results_display = format_youtube_research_results(research_data, search_terms) if research_data else "Demo mode - YouTube research simulated"
+            
             return (
                 status,
+                demo_transcript_full, # Show the full demo transcript string
+                search_terms_display,
+                research_results_display,
                 title,
                 description,
-                demo_transcript_full, # Show the full demo transcript string
                 None, 
                 None, 
                 None  
@@ -207,7 +429,7 @@ Thank you for watching, and don't forget to subscribe for more AI development tu
     except Exception as e:
         error_status = f"❌ Error processing video: {str(e)}"
         print(f"Error details: {e}")
-        return error_status, "", "", "", None, None, None
+        return error_status, "", "", "", "", "", None, None, None
 
 def test_modal_connection():
     """Test if Modal connection works"""
@@ -284,8 +506,8 @@ def create_interface():
         {demo_notice}
         """)
         
-        # Upload Section - Section 1 of 4
-        gr.HTML('<div class="section-indicator">Section 1 of 4</div>')
+        # Upload Section - Section 1 of 6
+        gr.HTML('<div class="section-indicator">Section 1 of 6</div>')
         with gr.Row():
             with gr.Column():
                 video_input = gr.Video(
@@ -316,29 +538,51 @@ def create_interface():
                     visible=True
                 )
         
-        # Content Section - Section 2 of 4
+        # YouTube Research Section - Section 2 of 6
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 2 of 4</div>')
-        gr.Markdown("## 📝 Generated Content")
+        gr.HTML('<div class="section-indicator">Section 2 of 6 - YouTube Competitive Research</div>')
+        gr.Markdown("## 🔍 Search Terms & Competitive Analysis")
         
-        title_output = gr.Textbox(
-            label="Title",
+        # Search terms display
+        search_terms_output = gr.Textbox(
+            label="🎯 Generated Search Terms",
             lines=2,
             interactive=False,
-            placeholder="Generated title will appear here..."
+            placeholder="Search terms from content analysis will appear here..."
+        )
+        
+        # YouTube research results
+        youtube_research_output = gr.Textbox(
+            label="📊 YouTube Competitive Research Results",
+            lines=10,
+            interactive=False,
+            placeholder="Competitive analysis from YouTube will appear here..."
+        )
+        gr.HTML('</div>')
+
+        # Content Section - Section 3 of 6  
+        gr.HTML('<div class="section">')
+        gr.HTML('<div class="section-indicator">Section 3 of 6 - Optimized Content</div>')
+        gr.Markdown("## 📝 AI-Optimized Content (Based on Competitive Research)")
+        
+        title_output = gr.Textbox(
+            label="🎬 Optimized Title",
+            lines=2,
+            interactive=False,
+            placeholder="AI-optimized title using competitive research will appear here..."
         )
         
         description_output = gr.Textbox(
-            label="Description",
+            label="📄 Optimized Description", 
             lines=8,
             interactive=False,
-            placeholder="Generated description will appear here..."
+            placeholder="AI-optimized description using competitive research will appear here..."
         )
         gr.HTML('</div>')
         
-        # Thumbnails Section - Section 3 of 4
+        # Thumbnails Section - Section 4 of 6
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 3 of 4</div>')
+        gr.HTML('<div class="section-indicator">Section 4 of 6</div>')
         gr.Markdown("## 🖼️ Generated Thumbnails")
         
         with gr.Row():
@@ -371,9 +615,11 @@ def create_interface():
             inputs=[video_input],
             outputs=[
                 status_output,
+                transcription_output,
+                search_terms_output,
+                youtube_research_output,
                 title_output, 
                 description_output,
-                transcription_output,  # NEW transcription output
                 thumbnail1,
                 thumbnail2,
                 thumbnail3
@@ -431,16 +677,30 @@ if __name__ == "__main__":
         print("🎭 Starting in demo mode for Steps 1-3, with local Step 4 Content Analysis Agent.")
     elif not MODAL_AVAILABLE and STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
         print("🎭 Starting in demo mode for Steps 1-3. Step 4 Agent available but failed to initialize Ollama.")
-    elif MODAL_AVAILABLE and not STEP4_AGENT_AVAILABLE:
-        # Logic for initializing or using content_analyzer when MODAL_AVAILABLE is handled within process_video and startup.
-        print("✅ Modal available for Steps 1-3. ContentAnalysisAgent is available and will be used for Step 4.")
-        # Ensure agent is initialized if Modal is up but local agent instance is still None
-        if content_analyzer is None:
+        # When Modal is available, initialize agents that will be needed
+        print(f"✅ Modal available for Steps 1-3. Agents available: Step 4: {STEP4_AGENT_AVAILABLE}, Step 5: {STEP5_AGENT_AVAILABLE}, Step 6: {STEP6_AGENT_AVAILABLE}")
+        
+        # Initialize agents for Modal context if they weren't initialized yet
+        if STEP4_AGENT_AVAILABLE and content_analyzer is None:
             try:
-                print("Attempting to initialize ContentAnalysisAgent as Modal is up but instance was None.")
+                print("Initializing ContentAnalysisAgent for Modal context...")
                 content_analyzer = ContentAnalysisAgent()
-            except Exception as e_init_modal_context:
-                print(f"Failed to init ContentAnalysisAgent in Modal context startup: {e_init_modal_context}")
+            except Exception as e:
+                print(f"Failed to init ContentAnalysisAgent in Modal context: {e}")
+        
+        if STEP5_AGENT_AVAILABLE and youtube_researcher is None:
+            try:
+                print("Initializing YouTubeResearchAgent for Modal context...")
+                youtube_researcher = YouTubeResearchAgent()
+            except Exception as e:
+                print(f"Failed to init YouTubeResearchAgent in Modal context: {e}")
+        
+        if STEP6_AGENT_AVAILABLE and content_enhancer is None:
+            try:
+                print("Initializing ContentEnhancementAgent for Modal context...")
+                content_enhancer = ContentEnhancementAgent()
+            except Exception as e:
+                print(f"Failed to init ContentEnhancementAgent in Modal context: {e}")
 
     demo = create_interface()
     demo.launch(

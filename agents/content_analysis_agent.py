@@ -33,6 +33,62 @@ class ContentAnalysisAgent:
         Settings.llm = llm # Set as global for LlamaIndex
         print(f"✅ ContentAnalysisAgent: LlamaIndex configured to use Ollama: endpoint={model_endpoint}, model={model_name or 'default'}")
 
+    def _parse_search_terms(self, raw_response: str) -> list:
+        """
+        Parse and clean the LLM response to extract clean search terms.
+        
+        Args:
+            raw_response: Raw text response from the LLM
+            
+        Returns:
+            List of cleaned search terms (max 3)
+        """
+        if not raw_response:
+            return []
+        
+        # Remove common LLM response prefixes/suffixes
+        cleaned_response = raw_response
+        
+        # Remove introductory phrases that LLMs sometimes add
+        prefixes_to_remove = [
+            "here are",
+            "the search terms are:",
+            "search terms:",
+            "youtube search terms:",
+            "comma-separated",
+            "based on the transcript",
+        ]
+        
+        # Remove prefixes and clean up colons, numbers, etc.
+        for prefix in prefixes_to_remove:
+            if cleaned_response.lower().startswith(prefix):
+                cleaned_response = cleaned_response[len(prefix):].strip()
+                break
+        
+        # Remove patterns like "3 targeted YouTube search terms:" from the beginning
+        import re
+        cleaned_response = re.sub(r'^\d+\s+[^:]+:\s*', '', cleaned_response)
+        cleaned_response = re.sub(r'^[^:]+:\s*', '', cleaned_response)
+        
+        # Remove newlines and extra whitespace
+        cleaned_response = ' '.join(cleaned_response.split())
+        
+        # Split by commas and clean each term
+        terms = []
+        for term in cleaned_response.split(','):
+            term = term.strip()
+            # Remove quotes if present
+            term = term.strip('"\'')
+            # Remove numbered prefixes like "1. " or "- "
+            import re
+            term = re.sub(r'^\d+\.\s*', '', term)
+            term = re.sub(r'^[-•]\s*', '', term)
+            
+            if term and len(term) > 2:  # Only add meaningful terms
+                terms.append(term)
+        
+        return terms[:3]  # Return max 3 terms
+
     def analyze_transcript(self, transcript_text: str) -> dict:
         """
         Analyzes video transcript to generate a summary and YouTube search terms.
@@ -85,16 +141,15 @@ class ContentAnalysisAgent:
         # --- 2. Search Term Generation ---
         search_term_prompt_template = (
             "You are a YouTube content strategy expert. Based on the following video transcript, "
-            "generate 1 to 3 targeted YouTube search terms that actual users would type to find this content. "
+            "generate exactly 3 targeted YouTube search terms that actual users would type to find this content. "
             "These terms should be highly relevant to the video's main topics and optimized for discoverability. "
-            "Provide the terms as a comma-separated list. "
-            "For example, if the video discusses 'new MacBook Pro features', suitable search terms might be: "
-            "'MacBook Pro 2024 review, latest MacBook Pro specs, MacBook Pro M3 features'.\n\n"
+            "Return ONLY the search terms separated by commas, nothing else. "
+            "Example output: MacBook Pro 2024 review, latest MacBook Pro specs, MacBook Pro M3 features\n\n"
             "Transcript:\n"
             "---------------------\n"
             "{transcript}\n"
             "---------------------\n"
-            "Comma-separated YouTube Search Terms:"
+            "Search Terms:"
         )
         search_term_prompt = search_term_prompt_template.format(transcript=transcript_text)
 
@@ -103,8 +158,9 @@ class ContentAnalysisAgent:
         try:
             search_terms_response = Settings.llm.complete(search_term_prompt)
             search_terms_raw = search_terms_response.text.strip()
-            if search_terms_raw:
-                search_terms_list = [term.strip() for term in search_terms_raw.split(',') if term.strip()]
+            
+            # Clean and parse the response
+            search_terms_list = self._parse_search_terms(search_terms_raw)
             print(f"✅ ContentAnalysisAgent: Search terms generated: {search_terms_list}")
         except Exception as e:
             print(f"❌ ContentAnalysisAgent: Error during search term generation: {e}")
