@@ -13,8 +13,10 @@ try:
     # Import the deployed functions using Modal's Function.from_name method
     process_video_to_audio = modal.Function.from_name("youtube-content-optimizer", "process_video_to_audio")
     transcribe_audio_with_whisper = modal.Function.from_name("youtube-content-optimizer", "transcribe_audio_with_whisper")
+    generate_thumbnails = modal.Function.from_name("youtube-content-optimizer", "generate_thumbnails")
     MODAL_AVAILABLE = True
     print("✅ Modal connection established!")
+    print("✅ Thumbnail generation function loaded!")
 except Exception as e:
     print(f"⚠️ Modal not available: {e}")
     print("🔄 Running in demo mode without Modal processing")
@@ -181,7 +183,7 @@ def process_video(video_file):
     try:
         if MODAL_AVAILABLE:
             # Step 1: Video Upload Processing
-            status = "🔄 Step 1/4: Processing video... Uploading to Modal for audio extraction"
+            status = "🔄 Step 1/7: Processing video... Uploading to Modal for audio extraction"
             
             # Read video file
             with open(video_file, "rb") as f:
@@ -194,7 +196,7 @@ def process_video(video_file):
             # Step 2: Audio Extraction
             audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
             
-            status = f"✅ Step 2/4: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/4: Starting Whisper transcription..."
+            status = f"✅ Step 2/7: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/7: Starting Whisper transcription..."
             
             # Step 3: Whisper Transcription
             print(f"🎙️ Sending audio to Whisper for transcription...")
@@ -206,7 +208,7 @@ def process_video(video_file):
             duration = transcription_data["duration"]
             word_count = transcription_data["word_count"]
             
-            status = f"✅ Step 3/6: Transcription complete! Lang: {language.upper()}, Duration: {duration:.1f}s, Words: {word_count}\n🔄 Step 4/6: Analyzing content for summary and search terms..."
+            status = f"✅ Step 3/7: Transcription complete! Lang: {language.upper()}, Duration: {duration:.1f}s, Words: {word_count}\n🔄 Step 4/7: Analyzing content for summary and search terms..."
             
             # Step 4: AI Agent Content Analysis & Search Term Generation
             video_summary = "[Step 4 analysis not run in Modal flow yet]"
@@ -230,16 +232,16 @@ def process_video(video_file):
                     analysis_results = content_analyzer.analyze_transcript(transcript_text)
                     video_summary = analysis_results["video_summary"]
                     search_terms = analysis_results["search_terms"]
-                    status += f"\n✅ Step 4/6: Content analysis complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
+                    status += f"\n✅ Step 4/7: Content analysis complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
                 else:
-                    status += "\n⚠️ Step 4/6: Content analysis agent not properly initialized."
+                    status += "\n⚠️ Step 4/7: Content analysis agent not properly initialized."
             else:
-                status += "\n⚠️ Step 4/6: Content analysis skipped (agent not available)."
+                status += "\n⚠️ Step 4/7: Content analysis skipped (agent not available)."
             
             # Step 5: YouTube Research & Competitive Analysis
             research_data = {}
             if STEP5_AGENT_AVAILABLE and search_terms:
-                status += f"\n🔄 Step 5/6: Researching competitive content on YouTube..."
+                status += f"\n🔄 Step 5/7: Researching competitive content on YouTube..."
                 
                 if youtube_researcher is None:
                     try:
@@ -256,14 +258,14 @@ def process_video(video_file):
                         status += f"\n✅ Step 5/6: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
                     except Exception as e:
                         print(f"Error during YouTube research: {e}")
-                        status += f"\n❌ Step 5/6: YouTube research failed: {str(e)}"
+                        status += f"\n❌ Step 5/7: YouTube research failed: {str(e)}"
                         research_data = {}
                 else:
-                    status += "\n⚠️ Step 5/6: YouTube research skipped (agent initialization failed)."
+                    status += "\n⚠️ Step 5/7: YouTube research skipped (agent initialization failed)."
             elif not search_terms:
-                status += "\n⚠️ Step 5/6: YouTube research skipped (no search terms from Step 4)."
+                status += "\n⚠️ Step 5/7: YouTube research skipped (no search terms from Step 4)."
             else:
-                status += "\n⚠️ Step 5/6: YouTube research skipped (agent not available)."
+                status += "\n⚠️ Step 5/7: YouTube research skipped (agent not available)."
             
             # Step 6: Content Enhancement (Optimized Titles & Descriptions)
             optimized_title = f"[Step 6 needed] Video Title - Search Terms: {', '.join(search_terms) if search_terms else 'N/A'}"
@@ -307,6 +309,64 @@ def process_video(video_file):
                 else:
                     status += "\n⚠️ Step 6/6: Content enhancement skipped (agent not available)."
             
+            # Step 7: Thumbnail Generation
+            status += "\n🔄 Step 7/7: Generating viral-optimized thumbnails..."
+            thumbnail1_data = None
+            thumbnail2_data = None  
+            thumbnail3_data = None
+            
+            try:
+                if optimized_title and video_summary:
+                    print(f"🎨 Generating thumbnails with context: title={optimized_title[:50]}...")
+                    
+                    # Generate thumbnails using all available context
+                    thumbnail_results = generate_thumbnails.remote(
+                        video_summary=video_summary,
+                        optimized_title=optimized_title,
+                        optimized_description=optimized_description,
+                        search_terms=search_terms,
+                        competitive_analysis=research_data
+                    )
+                    
+                    # Process thumbnail results
+                    if thumbnail_results and len(thumbnail_results) >= 3:
+                        import base64
+                        import io
+                        from PIL import Image
+                        
+                        # Convert base64 images to PIL Images for Gradio display
+                        for i, thumbnail_data in enumerate(thumbnail_results[:3]):
+                            if thumbnail_data.get("image_data"):
+                                try:
+                                    image_bytes = base64.b64decode(thumbnail_data["image_data"])
+                                    image = Image.open(io.BytesIO(image_bytes))
+                                    
+                                    if i == 0:
+                                        thumbnail1_data = image
+                                    elif i == 1:
+                                        thumbnail2_data = image
+                                    elif i == 2:
+                                        thumbnail3_data = image
+                                        
+                                except Exception as img_error:
+                                    print(f"❌ Error processing thumbnail {i+1}: {img_error}")
+                        
+                        successful_thumbnails = len([t for t in thumbnail_results if t.get("image_data")])
+                        status += f"\n✅ Step 7/7: Thumbnail generation complete! Generated {successful_thumbnails}/3 thumbnails"
+                        
+                        # Add thumbnail generation details
+                        concepts_used = thumbnail_results[0].get("concepts", [])
+                        if concepts_used:
+                            status += f"\n🎯 Key concepts used: {', '.join(concepts_used[:5])}"
+                    else:
+                        status += "\n⚠️ Step 7/7: Thumbnail generation returned unexpected format"
+                else:
+                    status += "\n⚠️ Step 7/7: Thumbnail generation skipped (missing title or summary)"
+                    
+            except Exception as e:
+                print(f"❌ Error during thumbnail generation: {e}")
+                status += f"\n❌ Step 7/7: Thumbnail generation failed: {str(e)}"
+            
             # Format search terms and research results for UI display
             search_terms_display = ", ".join(search_terms) if search_terms else "No search terms generated"
             research_results_display = format_youtube_research_results(research_data, search_terms)
@@ -321,9 +381,9 @@ def process_video(video_file):
                 research_results_display,
                 title,
                 description,
-                None, 
-                None, 
-                None  
+                thumbnail1_data, 
+                thumbnail2_data, 
+                thumbnail3_data  
             )
             
         else:
@@ -371,7 +431,7 @@ Thank you for watching, and don't forget to subscribe for more AI development tu
                     research_data = youtube_researcher.research_competitive_content(search_terms[:1])  # Use first term only for demo
                     videos_analyzed = research_data["research_summary"]["total_videos_analyzed"]
                     avg_views = research_data["competitive_analysis"]["average_views"]
-                    status += f"\n✅ Step 5/6: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
+                    status += f"\n✅ Step 5/7: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
                 except Exception as e:
                     print(f"❌ Error during YouTube research simulation: {e}")
                     status += f"\n❌ Step 5/6: YouTube research failed: {str(e)}"
@@ -410,6 +470,58 @@ Thank you for watching, and don't forget to subscribe for more AI development tu
                 title = f"🎬 Demo Generated Title: (Using Step 4 agent search terms: {', '.join(search_terms) if search_terms else 'N/A'})"
                 description = f"🎭 Demo Generated Description (incorporating Step 4 agent summary):\n\nSummary:\n{video_summary}\n\nThis is a demo of our YouTube Content Optimizer."
 
+            # Step 7: Demo Thumbnail Generation
+            status += "\n🔄 Step 7/7: Simulating thumbnail generation..."
+            
+            # In demo mode, we'll create placeholder thumbnails showing the concepts
+            thumbnail1_data = None
+            thumbnail2_data = None
+            thumbnail3_data = None
+            
+            try:
+                from PIL import Image, ImageDraw, ImageFont
+                import io
+                
+                # Create demo thumbnails with different styles
+                thumbnail_styles = ["Dynamic Style", "Tech Modern", "Educational"]
+                demo_thumbnails = []
+                
+                for i, style in enumerate(thumbnail_styles):
+                    # Create a placeholder thumbnail
+                    img = Image.new('RGB', (1280, 720), color=(50 + i*40, 100 + i*30, 200 - i*20))
+                    draw = ImageDraw.Draw(img)
+                    
+                    # Try to use a default font, fallback to PIL default
+                    try:
+                        font_large = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 60)
+                        font_small = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 30)
+                    except:
+                        font_large = ImageFont.load_default()
+                        font_small = ImageFont.load_default()
+                    
+                    # Add style text
+                    draw.text((50, 50), f"DEMO THUMBNAIL", fill="white", font=font_large)
+                    draw.text((50, 150), f"{style}", fill="yellow", font=font_small)
+                    draw.text((50, 200), f"Video: {filename[:30]}...", fill="white", font=font_small)
+                    
+                    # Add some design elements
+                    draw.rectangle([50, 300, 600, 320], fill="yellow")
+                    draw.text((50, 350), "🎬 AI-Generated Content", fill="white", font=font_small)
+                    
+                    if i == 0:
+                        thumbnail1_data = img
+                    elif i == 1:
+                        thumbnail2_data = img
+                    elif i == 2:
+                        thumbnail3_data = img
+                
+                status += "\n✅ Step 7/7: Demo thumbnails generated! (3 placeholder styles)"
+                status += "\n🎯 Demo concepts: AI, tutorial, technology, optimization"
+                
+            except Exception as e:
+                print(f"❌ Error creating demo thumbnails: {e}")
+                status += f"\n❌ Step 7/7: Demo thumbnail creation failed: {str(e)}"
+            
             # Format search terms and research results for demo display
             search_terms_display = ", ".join(search_terms) if search_terms else "No search terms generated"
             research_results_display = format_youtube_research_results(research_data, search_terms) if research_data else "Demo mode - YouTube research simulated"
@@ -421,9 +533,9 @@ Thank you for watching, and don't forget to subscribe for more AI development tu
                 research_results_display,
                 title,
                 description,
-                None, 
-                None, 
-                None  
+                thumbnail1_data, 
+                thumbnail2_data, 
+                thumbnail3_data  
             )
         
     except Exception as e:
@@ -538,9 +650,9 @@ def create_interface():
                     visible=True
                 )
         
-        # YouTube Research Section - Section 2 of 6
+        # YouTube Research Section - Section 2 of 4
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 2 of 6 - YouTube Competitive Research</div>')
+        gr.HTML('<div class="section-indicator">Section 2 of 4 - YouTube Competitive Research</div>')
         gr.Markdown("## 🔍 Search Terms & Competitive Analysis")
         
         # Search terms display
@@ -560,9 +672,9 @@ def create_interface():
         )
         gr.HTML('</div>')
 
-        # Content Section - Section 3 of 6  
+        # Content Section - Section 3 of 4  
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 3 of 6 - Optimized Content</div>')
+        gr.HTML('<div class="section-indicator">Section 3 of 4 - Optimized Content</div>')
         gr.Markdown("## 📝 AI-Optimized Content (Based on Competitive Research)")
         
         title_output = gr.Textbox(
@@ -580,10 +692,10 @@ def create_interface():
         )
         gr.HTML('</div>')
         
-        # Thumbnails Section - Section 4 of 6
+        # Thumbnails Section - Section 4 of 4
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 4 of 6</div>')
-        gr.Markdown("## 🖼️ Generated Thumbnails")
+        gr.HTML('<div class="section-indicator">Section 4 of 4 - AI-Generated Thumbnails</div>')
+        gr.Markdown("## 🖼️ Viral-Optimized Thumbnails")
         
         with gr.Row():
             thumbnail1 = gr.Image(
@@ -604,7 +716,7 @@ def create_interface():
         
         # Placeholder text for thumbnails when not generated
         thumbnail_placeholder = gr.HTML(
-            '<div class="thumbnail-placeholder">Finalize the title and description to generate thumbnails</div>',
+            '<div class="thumbnail-placeholder">🎨 Upload and process a video to generate viral-optimized thumbnails using AI!</div>',
             visible=True
         )
         gr.HTML('</div>')

@@ -23,6 +23,18 @@ whisper_image = modal.Image.debian_slim().apt_install(
     "torchaudio"
 )
 
+# Define the Modal image with Stable Diffusion for thumbnail generation
+diffusion_image = modal.Image.debian_slim().pip_install(
+    "diffusers>=0.24.0",
+    "torch>=2.0.0",
+    "torchvision",
+    "transformers>=4.25.0",
+    "accelerate>=0.20.0",
+    "Pillow>=9.0.0",
+    "numpy",
+    "requests"
+)
+
 @app.function(
     image=audio_image,
     timeout=600,  # 10 minutes timeout for large videos
@@ -175,4 +187,219 @@ def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str) -> di
         print(f"📁 Temporary audio file deleted")
         
         return transcription_data
+
+@app.function(
+    image=diffusion_image,
+    gpu="A10G",  # High-performance GPU for Stable Diffusion
+    memory=16384,  # 16GB RAM for model loading
+    timeout=600,  # 10 minutes timeout
+    max_containers=2  # Limit concurrent thumbnail generations
+)
+def generate_thumbnails(
+    video_summary: str,
+    optimized_title: str,
+    optimized_description: str,
+    search_terms: list,
+    competitive_analysis: dict = None
+) -> list:
+    """
+    Step 7: Generate viral-optimized thumbnails using Stable Diffusion
+    
+    Args:
+        video_summary: Summary from content analysis
+        optimized_title: Optimized title from enhancement agent
+        optimized_description: Optimized description from enhancement agent  
+        search_terms: Search terms from content analysis
+        competitive_analysis: Research data from YouTube analysis
+        
+    Returns:
+        list: List of thumbnail image data (base64 encoded)
+    """
+    
+    print(f"🎨 Starting thumbnail generation for: {optimized_title[:50]}...")
+    
+    import torch
+    from diffusers import DiffusionPipeline
+    import io
+    import base64
+    from PIL import Image
+    import re
+    
+    # Load Stable Diffusion XL model
+    print("🔄 Loading Stable Diffusion XL model...")
+    pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        variant="fp16"
+    )
+    pipe = pipe.to("cuda")
+    
+    # Enable memory optimization
+    pipe.enable_vae_slicing()
+    pipe.enable_attention_slicing()
+    print("✅ Stable Diffusion XL model loaded successfully!")
+    
+    def extract_key_concepts(text: str) -> list:
+        """Extract key visual concepts from text content"""
+        
+        # Technology/product terms that make good visual elements
+        tech_keywords = [
+            "AI", "machine learning", "technology", "software", "coding", "programming",
+            "data", "analytics", "cloud", "mobile", "web", "app", "digital",
+            "MacBook", "iPhone", "computer", "laptop", "smartphone", "gadget",
+            "tutorial", "guide", "tips", "review", "comparison", "vs"
+        ]
+        
+        # Action/engagement words for dynamic thumbnails
+        action_keywords = [
+            "learn", "build", "create", "master", "discover", "unlock", "reveal",
+            "secret", "hack", "trick", "method", "strategy", "solution", "fix"
+        ]
+        
+        # Extract concepts from the text
+        concepts = []
+        text_lower = text.lower()
+        
+        # Find tech/product concepts
+        for keyword in tech_keywords:
+            if keyword.lower() in text_lower:
+                concepts.append(keyword)
+        
+        # Find action concepts  
+        for keyword in action_keywords:
+            if keyword.lower() in text_lower:
+                concepts.append(keyword)
+        
+        # Extract quoted terms and capitalize words that might be products/concepts
+        words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+        concepts.extend(words[:3])  # Add up to 3 capitalized terms
+        
+        return list(set(concepts))[:8]  # Return unique concepts, max 8
+    
+    def generate_thumbnail_prompt(style: str, title: str, summary: str, concepts: list) -> str:
+        """Generate optimized prompts for viral YouTube thumbnails"""
+        
+        # Base style definitions for different thumbnail approaches
+        style_templates = {
+            "dynamic": {
+                "base": "high-energy YouTube thumbnail, dynamic composition, bright vibrant colors, ",
+                "elements": "dramatic lighting, action-oriented, bold text overlay space, ",
+                "quality": "professional photography style, studio lighting, 8K resolution, trending on YouTube"
+            },
+            "tech_modern": {
+                "base": "modern tech YouTube thumbnail, sleek minimalist design, gradient backgrounds, ",
+                "elements": "glowing tech elements, clean typography space, modern UI design, ",
+                "quality": "professional digital art, high contrast, sharp details, premium look"
+            },
+            "educational": {
+                "base": "educational YouTube thumbnail, friendly approachable style, warm colors, ",
+                "elements": "clear focal point, teaching elements, infographic style, organized layout, ",
+                "quality": "professional illustration, clean design, high readability, engaging"
+            }
+        }
+        
+        style_config = style_templates.get(style, style_templates["dynamic"])
+        
+        # Extract main subject from title and concepts
+        main_subject = "content creator"
+        if concepts:
+            # Prioritize tech/product terms for main subject
+            tech_terms = [c for c in concepts if c.lower() in ["ai", "macbook", "iphone", "computer", "laptop", "technology"]]
+            if tech_terms:
+                main_subject = tech_terms[0]
+            else:
+                main_subject = concepts[0] if concepts else "content creator"
+        
+        # Build the prompt
+        prompt_parts = [
+            style_config["base"],
+            f"featuring {main_subject}, ",
+            style_config["elements"],
+            f"theme: {' '.join(concepts[:3]) if concepts else 'technology'}, ",
+            "YouTube thumbnail format, 16:9 aspect ratio, ",
+            "compelling visual hook, clickbait style, ",
+            style_config["quality"]
+        ]
+        
+        # Add specific elements based on content
+        if "tutorial" in title.lower() or "how to" in title.lower():
+            prompt_parts.insert(-1, "tutorial elements, step-by-step visual, ")
+        
+        if "review" in title.lower() or "vs" in title.lower():
+            prompt_parts.insert(-1, "comparison elements, product showcase, ")
+        
+        if any(word in title.lower() for word in ["secret", "hidden", "trick", "hack"]):
+            prompt_parts.insert(-1, "mysterious elements, revealed content hint, ")
+        
+        full_prompt = "".join(prompt_parts)
+        
+        # Negative prompt to avoid unwanted elements
+        negative_prompt = (
+            "text, watermarks, logos, signatures, blurry, low quality, "
+            "oversaturated, distorted faces, multiple people, crowded composition, "
+            "dark lighting, unclear subject, messy background"
+        )
+        
+        return full_prompt, negative_prompt
+    
+    # Extract key concepts from all available content
+    all_content = f"{optimized_title} {video_summary} {' '.join(search_terms)}"
+    key_concepts = extract_key_concepts(all_content)
+    
+    print(f"🎯 Key concepts for thumbnails: {key_concepts}")
+    
+    # Generate 3 different thumbnail styles
+    thumbnail_styles = ["dynamic", "tech_modern", "educational"]
+    thumbnails = []
+    
+    for i, style in enumerate(thumbnail_styles):
+        print(f"🎨 Generating thumbnail {i+1}/3 - {style} style...")
+        
+        try:
+            # Generate prompt for this style
+            prompt, negative_prompt = generate_thumbnail_prompt(
+                style, optimized_title, video_summary, key_concepts
+            )
+            
+            print(f"📝 Prompt: {prompt[:100]}...")
+            
+            # Generate image
+            image = pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                height=720,  # YouTube thumbnail height
+                width=1280,  # YouTube thumbnail width (16:9 ratio)
+                num_inference_steps=30,  # Good quality vs speed balance
+                guidance_scale=7.5,  # Creative but controlled generation
+                generator=torch.Generator(device="cuda").manual_seed(42 + i)  # Consistent but different seeds
+            ).images[0]
+            
+            # Convert to base64 for return
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG", quality=95)
+            image_b64 = base64.b64encode(buffer.getvalue()).decode()
+            
+            thumbnails.append({
+                "style": style,
+                "image_data": image_b64,
+                "prompt_used": prompt[:200] + "...",  # Store truncated prompt for debugging
+                "concepts": key_concepts
+            })
+            
+            print(f"✅ Thumbnail {i+1}/3 generated successfully!")
+            
+        except Exception as e:
+            print(f"❌ Error generating thumbnail {i+1}: {e}")
+            # Add placeholder for failed generation
+            thumbnails.append({
+                "style": style,
+                "image_data": None,
+                "error": str(e),
+                "concepts": key_concepts
+            })
+    
+    print(f"🎉 Thumbnail generation complete! Generated {len([t for t in thumbnails if t.get('image_data')])} successful thumbnails")
+    
+    return thumbnails
 
