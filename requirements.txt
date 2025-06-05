@@ -1,2 +1,6 @@
 gradio==5.32.1
 modal==1.0.2
+llama-index
+llama-index-llms-ollama
+llama-index-llms-openai
+python-dotenv

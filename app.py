@@ -1,9 +1,13 @@
 import gradio as gr
 import os
 import modal
+from llama_index.core import Settings # Added for checking Settings.llm
+
 # Try to import and connect to Modal, but gracefully handle if not available
 MODAL_AVAILABLE = False
 
+# Note: Step 4 is implemented via ContentAnalysisAgent in agents/ directory
+# No need for separate src.step4_content_analysis module
 
 try:
     # Import the deployed functions using Modal's Function.from_name method
@@ -16,19 +20,66 @@ except Exception as e:
     print("🔄 Running in demo mode without Modal processing")
     MODAL_AVAILABLE = False
 
+# Step 4 initialization is handled by ContentAnalysisAgent class
+
+# Attempt to import Step 4 Agent
+try:
+    from agents.content_analysis_agent import ContentAnalysisAgent
+    STEP4_AGENT_AVAILABLE = True
+    # Instantiate the agent. This will also initialize LlamaIndex for Ollama on instantiation.
+    # We will do this conditionally later based on whether Modal is running or not,
+    # to avoid initializing Ollama if Modal will handle Step 4.
+    content_analyzer = None 
+    print("✅ Step 4 (ContentAnalysisAgent) class loaded.")
+except ImportError as e:
+    print(f"⚠️ Step 4 Agent (agents.content_analysis_agent) not found or import error: {e}. Content analysis will be skipped.")
+    STEP4_AGENT_AVAILABLE = False
+    # Define a dummy class and instance if not available so the app can run
+    class ContentAnalysisAgent:
+        def __init__(self):
+            print("Dummy ContentAnalysisAgent initialized.")
+        def analyze_transcript(self, transcript: str):
+            print("Dummy ContentAnalysisAgent.analyze_transcript called.")
+            return {
+                "video_summary": "[Content analysis agent not available]",
+                "search_terms": []
+            }
+    content_analyzer = ContentAnalysisAgent() # Instantiate dummy for safety
+
+# Initialize ContentAnalysisAgent for local use if Step 4 is available and Modal is not
+# This agent will handle its own LlamaIndex Ollama initialization.
+if STEP4_AGENT_AVAILABLE and not MODAL_AVAILABLE:
+    try:
+        print("🔄 Initializing ContentAnalysisAgent for local Step 4 processing...")
+        content_analyzer = ContentAnalysisAgent()
+        print("✅ ContentAnalysisAgent initialized for local use.")
+    except Exception as e:
+        print(f"⚠️ Error initializing ContentAnalysisAgent for local Step 4: {e}. Step 4 might fail.")
+        # Fallback to dummy if initialization fails
+        if not isinstance(content_analyzer, ContentAnalysisAgent) or content_analyzer is None:
+            class ContentAnalysisAgent_Dummy:
+                def __init__(self):
+                    print("Fallback Dummy ContentAnalysisAgent initialized after error.")
+                def analyze_transcript(self, transcript: str):
+                    return {"video_summary": "[Content analysis agent failed to initialize]", "search_terms": []}
+            content_analyzer = ContentAnalysisAgent_Dummy()
+
 def process_video(video_file):
     """
     Main processing function for the video content optimization pipeline.
     Steps 1-3: Video upload, audio extraction, and Whisper transcription via Modal
-    Steps 4-6: To be implemented (content generation, thumbnails)
+    Step 4: Content Analysis (Summary & Search Terms) using ContentAnalysisAgent
+    Steps 5-6: To be implemented (YouTube research, enhanced content, thumbnails)
     """
+    global content_analyzer # Make sure we're using the potentially initialized agent
+
     if video_file is None:
         return "Please upload a video file.", "", "", "", None, None, None
     
     try:
         if MODAL_AVAILABLE:
             # Step 1: Video Upload Processing
-            status = "🔄 Step 1/3: Processing video... Uploading to Modal for audio extraction"
+            status = "🔄 Step 1/4: Processing video... Uploading to Modal for audio extraction"
             
             # Read video file
             with open(video_file, "rb") as f:
@@ -41,7 +92,7 @@ def process_video(video_file):
             # Step 2: Audio Extraction
             audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
             
-            status = f"✅ Step 2/3: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/3: Starting Whisper transcription..."
+            status = f"✅ Step 2/4: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/4: Starting Whisper transcription..."
             
             # Step 3: Whisper Transcription
             print(f"🎙️ Sending audio to Whisper for transcription...")
@@ -53,21 +104,54 @@ def process_video(video_file):
             duration = transcription_data["duration"]
             word_count = transcription_data["word_count"]
             
-            status = f"✅ Step 3/3: Transcription complete!\n" \
-                    f"📝 Language: {language.upper()} | ⏱️ Duration: {duration:.1f}s | 📄 Words: {word_count}"
+            status = f"✅ Step 3/4: Transcription complete! Lang: {language.upper()}, Duration: {duration:.1f}s, Words: {word_count}\n🔄 Step 4/4: Analyzing content for summary and search terms..."
             
-            # Placeholder for Steps 4-6 (to be implemented)
-            title = "Generated Title: [Steps 4-6 to be implemented - Content generation needed]"
-            description = f"Generated Description: [Will be created using transcription]\n\nTranscription ready for content generation!"
+            # Step 4: AI Agent Content Analysis & Search Term Generation
+            # If Step 4 were a Modal function, it would be called here.
+            # For now, if MODAL_AVAILABLE, we assume Step 4 might still run locally 
+            # (e.g. app.py is hosted on Modal, but calls a local agent for Step 4)
+            # OR that ContentAnalysisAgent is designed to be part of a Modal deployment itself.
+            # This part needs clarification if Step 4 should *also* be a Modal remote call.
+            # Assuming for now it uses the globally available `content_analyzer` instance
+            # which would be configured based on where app.py runs.
+            video_summary = "[Step 4 analysis not run in Modal flow yet]"
+            search_terms = []
+
+            if STEP4_AGENT_AVAILABLE:
+                if content_analyzer is None:
+                    print("Attempting to initialize ContentAnalysisAgent for Modal context (should be pre-initialized ideally)")
+                    try:
+                        content_analyzer = ContentAnalysisAgent()
+                    except Exception as e_agent_init:
+                        print(f"Error initializing agent in modal context: {e_agent_init}")
+                        # Fallback to a dummy to prevent crash
+                        class ContentAnalysisAgent_Dummy_Modal:
+                            def analyze_transcript(self, transcript: str):
+                                return {"video_summary": "[Content analysis agent failed to initialize in Modal]", "search_terms": []}
+                        content_analyzer = ContentAnalysisAgent_Dummy_Modal()
+                
+                # Ensure content_analyzer is not None before calling (it should be an instance)
+                if hasattr(content_analyzer, 'analyze_transcript'):
+                    analysis_results = content_analyzer.analyze_transcript(transcript_text)
+                    video_summary = analysis_results["video_summary"]
+                    search_terms = analysis_results["search_terms"]
+                    status += f"\n✅ Step 4/4: Content analysis complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
+                else:
+                    status += "\n⚠️ Step 4/4: Content analysis agent not properly initialized."
+            else:
+                status += "\n⚠️ Step 4/4: Content analysis skipped (agent not available)."
+            
+            title = f"Generated Title: [Step 5 & 6 needed - Search Terms: {', '.join(search_terms) if search_terms else 'N/A'}]"
+            description = f"Video Summary (Step 4):\n{video_summary}\n\n[Step 5 & 6 needed for final description based on summary and research]"
             
             return (
                 status,
                 title,
                 description,
-                transcript_text,  # New transcription output
-                None,  # Thumbnail 1
-                None,  # Thumbnail 2
-                None   # Thumbnail 3
+                transcript_text, 
+                None, 
+                None, 
+                None  
             )
             
         else:
@@ -76,44 +160,48 @@ def process_video(video_file):
             file_size = os.path.getsize(video_file) / (1024*1024) if video_file else 0
             
             status = f"🎭 DEMO MODE: Simulating video processing for {filename} ({file_size:.1f} MB)\n" \
-                    f"✅ Step 1/3: Video upload simulated\n" \
-                    f"✅ Step 2/3: Audio extraction simulated\n" \
-                    f"✅ Step 3/3: Whisper transcription simulated"
+                    f"✅ Step 1/4: Video upload simulated\n" \
+                    f"✅ Step 2/4: Audio extraction simulated\n" \
+                    f"✅ Step 3/4: Whisper transcription simulated"
             
-            title = "🎬 Demo Generated Title: 'How to Build Amazing AI Apps with Gradio and Modal'"
-            description = """🎭 Demo Generated Description:
-
-In this video, we explore the powerful combination of Gradio and Modal for building scalable AI applications. Learn how to:
-
-• Process video content automatically
-• Extract audio using FFmpeg in the cloud
-• Generate engaging titles and descriptions
-• Create stunning thumbnails with AI
-
-This is a demo of our YouTube Content Optimizer - in the real version, this content would be generated from your actual video transcription using Whisper AI.
-
-🚀 Built with: Gradio + Modal + OpenAI Whisper + AI Content Generation
-
-#AI #ContentCreation #YouTube #Automation"""
-
-            demo_transcript = """🎭 Demo Transcription:
+            demo_transcript_full = """🎭 Demo Transcription (Step 3 output):
 
 Hello and welcome to this tutorial on building AI applications with Gradio and Modal. In this video, we'll explore how to create scalable, cloud-based AI workflows that can process video content automatically.
 
 First, we'll set up our Modal infrastructure with GPU support for running Whisper AI transcription. Then we'll integrate it with a beautiful Gradio interface that allows users to upload videos and get instant results.
 
-The power of this combination is that we can handle heavy computational tasks in the cloud while providing a smooth user experience through the web interface. This makes AI accessible to everyone, regardless of their local hardware capabilities.
-
 Thank you for watching, and don't forget to subscribe for more AI development tutorials!"""
+            demo_transcript_text_only = demo_transcript_full.split(":\n\n", 1)[1] if ":\n\n" in demo_transcript_full else demo_transcript_full
+
+            # Simulate Step 4 using the ContentAnalysisAgent if available (already initialized if not MODAL_AVAILABLE)
+            if STEP4_AGENT_AVAILABLE and content_analyzer and hasattr(content_analyzer, 'analyze_transcript'):
+                status += "\n🔄 Step 4/4: Running local content analysis via agent..."
+                try:
+                    analysis_results = content_analyzer.analyze_transcript(demo_transcript_text_only) 
+                    video_summary = analysis_results["video_summary"]
+                    search_terms = analysis_results["search_terms"]
+                    status += f"\n✅ Step 4/4: Local content analysis by agent complete!\n🔍 Search Terms: {', '.join(search_terms) if search_terms else 'None generated'}"
+                except Exception as e:
+                    print(f"❌ Error during local Step 4 agent simulation: {e}")
+                    video_summary = "[Error in local Step 4 agent simulation]"
+                    search_terms = []
+                    status += f"\n❌ Step 4/4: Local content analysis by agent failed: {e}"
+            else:
+                video_summary = "[Content analysis agent (Step 4) would run here if available and initialized]"
+                search_terms = []
+                status += "\n⚠️ Step 4/4: Content analysis by agent skipped (agent not available/initialized)."
+
+            title = f"🎬 Demo Generated Title: (Using Step 4 agent search terms: {', '.join(search_terms) if search_terms else 'N/A'})"
+            description = f"🎭 Demo Generated Description (incorporating Step 4 agent summary):\n\nSummary:\n{video_summary}\n\nThis is a demo of our YouTube Content Optimizer. Steps 5 & 6 will refine this further."
 
             return (
                 status,
                 title,
                 description,
-                demo_transcript,
-                None,  # Thumbnail 1
-                None,  # Thumbnail 2
-                None   # Thumbnail 3
+                demo_transcript_full, # Show the full demo transcript string
+                None, 
+                None, 
+                None  
             )
         
     except Exception as e:
@@ -196,8 +284,8 @@ def create_interface():
         {demo_notice}
         """)
         
-        # Upload Section - Section 1 of 3
-        gr.HTML('<div class="section-indicator">Section 1 of 3</div>')
+        # Upload Section - Section 1 of 4
+        gr.HTML('<div class="section-indicator">Section 1 of 4</div>')
         with gr.Row():
             with gr.Column():
                 video_input = gr.Video(
@@ -228,9 +316,9 @@ def create_interface():
                     visible=True
                 )
         
-        # Content Section - Section 2 of 3
+        # Content Section - Section 2 of 4
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 2 of 3</div>')
+        gr.HTML('<div class="section-indicator">Section 2 of 4</div>')
         gr.Markdown("## 📝 Generated Content")
         
         title_output = gr.Textbox(
@@ -248,9 +336,9 @@ def create_interface():
         )
         gr.HTML('</div>')
         
-        # Thumbnails Section - Section 3 of 3
+        # Thumbnails Section - Section 3 of 4
         gr.HTML('<div class="section">')
-        gr.HTML('<div class="section-indicator">Section 3 of 3</div>')
+        gr.HTML('<div class="section-indicator">Section 3 of 4</div>')
         gr.Markdown("## 🖼️ Generated Thumbnails")
         
         with gr.Row():
@@ -303,17 +391,60 @@ if __name__ == "__main__":
         try:
             if test_modal_connection():
                 print("✅ Modal is ready! Starting Gradio interface...")
+                # If Modal is primary, Step 4 agent might not be needed locally
+                # unless app.py itself is run in Modal and ContentAnalysisAgent is part of that.
+                if STEP4_AGENT_AVAILABLE and content_analyzer is None:
+                    print("INFO: Modal available, local ContentAnalysisAgent not pre-initialized. Will init if needed in process_video.")
             else:
-                print("⚠️ Modal connection failed, but continuing in demo mode...")
+                print("⚠️ Modal connection failed.")
+                # If Modal fails, try to ensure local agent is up if not already
+                if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
+                    print("🔄 Modal failed, ensuring ContentAnalysisAgent for local Step 4 processing...")
+                    try:
+                        content_analyzer = ContentAnalysisAgent()
+                        print("✅ ContentAnalysisAgent initialized for local fallback.")
+                    except Exception as e:
+                        print(f"⚠️ Error initializing ContentAnalysisAgent for local fallback: {e}.")
         except Exception as e:
             print(f"⚠️ Modal connection error: {e}")
-            print("🔄 Continuing in demo mode...")
+            if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
+                print("🔄 Modal error, ensuring ContentAnalysisAgent for local Step 4 processing...")
+                try:
+                    content_analyzer = ContentAnalysisAgent()
+                    print("✅ ContentAnalysisAgent initialized for local fallback after Modal error.")
+                except Exception as e_agent:
+                    print(f"⚠️ Error initializing ContentAnalysisAgent on Modal error: {e_agent}.")
     else:
-        print("🎭 Starting in demo mode (Modal not available)")
-    
+        print("🎭 Modal not available.")
+        # Ensure local agent is initialized if Modal is not available from the start
+        if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
+            print("🔄 Modal not available, ensuring ContentAnalysisAgent for local Step 4 processing...")
+            try:
+                content_analyzer = ContentAnalysisAgent()
+                print("✅ ContentAnalysisAgent initialized for local use as Modal is unavailable.")
+            except Exception as e:
+                print(f"⚠️ Error initializing ContentAnalysisAgent as Modal is unavailable: {e}.")
+
+    if not MODAL_AVAILABLE and not STEP4_AGENT_AVAILABLE:
+        print("🎭 Starting in full demo mode (Modal and Step 4 Agent not available)")
+    elif not MODAL_AVAILABLE and STEP4_AGENT_AVAILABLE and content_analyzer and Settings.llm:
+        print("🎭 Starting in demo mode for Steps 1-3, with local Step 4 Content Analysis Agent.")
+    elif not MODAL_AVAILABLE and STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
+        print("🎭 Starting in demo mode for Steps 1-3. Step 4 Agent available but failed to initialize Ollama.")
+    elif MODAL_AVAILABLE and not STEP4_AGENT_AVAILABLE:
+        # Logic for initializing or using content_analyzer when MODAL_AVAILABLE is handled within process_video and startup.
+        print("✅ Modal available for Steps 1-3. ContentAnalysisAgent is available and will be used for Step 4.")
+        # Ensure agent is initialized if Modal is up but local agent instance is still None
+        if content_analyzer is None:
+            try:
+                print("Attempting to initialize ContentAnalysisAgent as Modal is up but instance was None.")
+                content_analyzer = ContentAnalysisAgent()
+            except Exception as e_init_modal_context:
+                print(f"Failed to init ContentAnalysisAgent in Modal context startup: {e_init_modal_context}")
+
     demo = create_interface()
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False
+        share=False # Set to True if you want to share a public link (requires Gradio account/login sometimes)
     ) 
