@@ -5,10 +5,10 @@ from llama_index.core import Settings
 from llama_index.llms.ollama import Ollama
 import re
 import json
-
-class ContentEnhancementAgent:
-    """
-    An agent responsible for generating optimized YouTube titles and descriptions
+from collections import Counter # Added for n-gram analysis
+import logging
+import time # For retry delay
+from typing import Optional # For retry return type
     by combining original video content analysis with competitive research data.
     This agent implements Step 6 of the content optimization pipeline.
     """
@@ -17,6 +17,7 @@ class ContentEnhancementAgent:
         """
         Initializes the agent and sets up the LlamaIndex LLM configuration.
         """
+        self.logger = logging.getLogger(__name__)
         self._initialize_llamaindex_ollama()
 
     def _initialize_llamaindex_ollama(self):
@@ -29,13 +30,39 @@ class ContentEnhancementAgent:
         model_name = os.getenv("MODEL_NAME")
 
         if not model_endpoint:
+            self.logger.error("MODEL_ENDPOINT environment variable not set for ContentEnhancementAgent.")
             raise ValueError("MODEL_ENDPOINT environment variable not set for ContentEnhancementAgent.")
         if not model_name:
-            print("Warning: MODEL_NAME environment variable not set for ContentEnhancementAgent. Using a default or letting Ollama decide.")
+            self.logger.warning("MODEL_NAME environment variable not set for ContentEnhancementAgent. Using a default or letting Ollama decide.")
 
         llm = Ollama(base_url=model_endpoint, model=model_name, request_timeout=120.0)
         Settings.llm = llm
-        print(f"✅ ContentEnhancementAgent: LlamaIndex configured to use Ollama: endpoint={model_endpoint}, model={model_name or 'default'}")
+        self.logger.info("✅ ContentEnhancementAgent: LlamaIndex configured to use Ollama: endpoint=%s, model=%s", model_endpoint, model_name or 'default')
+
+    def _call_llm_with_retry(self, prompt: str, max_retries: int = 2, delay_seconds: int = 5) -> Optional[str]:
+        """
+        Calls the LLM with a given prompt and retries on failure.
+        """
+        for attempt in range(max_retries):
+            try:
+                self.logger.info("LLM call attempt %d/%d for ContentEnhancementAgent", attempt + 1, max_retries)
+                response = Settings.llm.complete(prompt)
+                return response.text.strip()
+            except Exception as e: # Broad exception catch
+                self.logger.error(
+                    "LLM call failed in ContentEnhancementAgent on attempt %d/%d: %s",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                    exc_info=True
+                )
+                if attempt < max_retries - 1:
+                    self.logger.info("Waiting %d seconds before next retry...", delay_seconds)
+                    time.sleep(delay_seconds)
+                else:
+                    self.logger.error("All LLM retry attempts failed for prompt in ContentEnhancementAgent.")
+                    return None
+        return None
 
     def enhance_content(self, video_summary: str, search_terms: List[str], research_data: Dict) -> Dict:
         """
@@ -50,10 +77,10 @@ class ContentEnhancementAgent:
             Dictionary containing optimized title and description
         """
         if not Settings.llm:
-            print("🚨 LLM not initialized in ContentEnhancementAgent. Re-initializing...")
-            self._initialize_llamaindex_ollama()
+            self.logger.error("🚨 LLM not initialized in ContentEnhancementAgent. Re-initializing...")
+            self._initialize_llamaindex_ollama() # Attempt re-init
 
-        print(f"🚀 ContentEnhancementAgent: Starting content enhancement...")
+        self.logger.info("🚀 ContentEnhancementAgent: Starting content enhancement...")
         
         # Extract competitive insights
         competitive_insights = self._extract_competitive_insights(research_data)
@@ -134,32 +161,70 @@ class ContentEnhancementAgent:
         Returns:
             List of identified successful patterns
         """
-        patterns = []
-        
         if not titles:
-            return patterns
-        
-        # Check for common title patterns
-        patterns_to_check = [
-            ("Question format", r"\?"),
-            ("How to format", r"(?i)how\s+to"),
-            ("Number format", r"^\d+"),
-            ("Year/Date", r"202[0-9]"),
-            ("Tutorial/Guide", r"(?i)(tutorial|guide|walkthrough)"),
-            ("Best/Top", r"(?i)(best|top|ultimate)"),
-            ("Complete/Full", r"(?i)(complete|full|comprehensive)"),
-            ("Quick/Fast", r"(?i)(quick|fast|easy|simple)"),
-            ("Review/Explained", r"(?i)(review|explained|breakdown)")
-        ]
-        
-        for pattern_name, regex in patterns_to_check:
-            count = sum(1 for title in titles if re.search(regex, title))
-            if count > 0:
-                percentage = (count / len(titles)) * 100
-                if percentage >= 30:  # If 30% or more titles use this pattern
-                    patterns.append(f"{pattern_name} ({percentage:.0f}%)")
-        
-        return patterns
+            return []
+
+        stopwords = set([
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "should",
+            "can", "could", "may", "might", "must", "and", "but", "or", "nor",
+            "for", "so", "yet", "in", "on", "at", "by", "from", "to", "with", "about",
+            "of", "how", "what", "when", "where", "why", "which", "my", "your", "its",
+            "tutorial", "guide", "video", "explained", "review", "vs", "new", "update",
+            "tips", "tricks", "secret", "hack", "learn", "build", "create", "discover", "best", "top"
+            # Added some common YouTube specific words that might not be general patterns
+        ])
+
+        bigram_counts = Counter()
+        trigram_counts = Counter()
+
+        for title in titles:
+            # Basic tokenization: lowercase, split by space, remove non-alphanumeric chars from ends of words
+            words = [re.sub(r'[^a-z0-9#+-]', '', word.strip().lower()) for word in title.split()]
+            # Filter stopwords and very short words (potential noise from punctuation removal)
+            tokens = [word for word in words if word and word not in stopwords and len(word) > 2]
+
+            # Generate n-grams
+            bigrams = list(zip(tokens, tokens[1:]))
+            trigrams = list(zip(tokens, tokens[1:], tokens[2:]))
+
+            bigram_counts.update(bigrams)
+            trigram_counts.update(trigrams)
+
+        # Identify frequent n-grams (appearing more than once)
+        # And also consider n-grams that make up a significant portion of a short list of titles
+        min_frequency = 1
+        if len(titles) >= 5 : # If we have at least 5 titles, require more than 1 occurrence
+             min_frequency = 2
+        if len(titles) < 3 and len(titles) > 0: # For very few titles, allow single occurrences of longer phrases
+            min_frequency = 1
+
+
+        frequent_bigrams = {bg: count for bg, count in bigram_counts.items() if count >= min_frequency}
+        frequent_trigrams = {tg: count for tg, count in trigram_counts.items() if count >= min_frequency}
+
+        # Sort by frequency
+        sorted_bigrams = sorted(frequent_bigrams.items(), key=lambda item: item[1], reverse=True)
+        sorted_trigrams = sorted(frequent_trigrams.items(), key=lambda item: item[1], reverse=True)
+
+        # Format output (top N, e.g., 3-5 combined)
+        identified_patterns = []
+        for bg, count in sorted_bigrams[:3]: # Top 3 bigrams
+            identified_patterns.append(" ".join(bg))
+
+        for tg, count in sorted_trigrams[:2]: # Top 2 trigrams
+            # Avoid adding trigrams that are just extensions of already added bigrams if they are too similar
+            trigram_str = " ".join(tg)
+            is_covered = False
+            for pattern in identified_patterns:
+                if trigram_str.startswith(pattern) or trigram_str.endswith(pattern):
+                    is_covered = True
+                    break
+            if not is_covered:
+                 identified_patterns.append(trigram_str)
+
+        # Limit total patterns to avoid overwhelming the prompt
+        return identified_patterns[:5]
 
     def _generate_optimized_title(self, video_summary: str, search_terms: List[str], competitive_insights: Dict) -> str:
         """
@@ -190,7 +255,7 @@ class ContentEnhancementAgent:
         if patterns:
             competitive_context += f"\nSuccessful title patterns: {', '.join(patterns)}\n"
         
-        title_prompt = f"""You are a YouTube optimization expert specializing in creating high-performing video titles. 
+        title_prompt = f"""You are a YouTube optimization expert specializing in creating high-performing video titles.
 
 Create an engaging, click-worthy title for a video with this content:
 
@@ -202,35 +267,40 @@ TARGET SEARCH TERMS: {', '.join(search_terms)}
 COMPETITIVE RESEARCH DATA:{competitive_context}
 
 TITLE OPTIMIZATION REQUIREMENTS:
-1. Maximum 60 characters (optimal for YouTube display)
-2. Include primary keyword from search terms naturally
-3. Create curiosity and urgency
-4. Use proven patterns from competitive analysis
-5. Avoid clickbait - be accurate to content
-6. Consider emotional triggers (excitement, solving problems, etc.)
+1. Maximum 70 characters is ideal for YouTube display.
+2. Naturally incorporate the primary keyword from search terms.
+3. Use natural language and avoid keyword stuffing.
+4. Balance click-worthiness with accurate content representation.
+5. Create curiosity and urgency where appropriate.
+6. If competitive analysis suggests proven patterns (e.g., "How to...", "Top 5..."), consider using them if fitting.
+7. Avoid clickbait - the title must be accurate to the video's content.
+8. Consider emotional triggers (e.g., excitement, problem-solving, learning).
 
-Generate ONE optimized title that balances SEO optimization with engagement. Return only the title, nothing else."""
+Generate ONE optimized title that balances SEO optimization with high engagement. Return only the title, nothing else."""
 
-        try:
-            print("🔄 ContentEnhancementAgent: Generating optimized title...")
-            title_response = Settings.llm.complete(title_prompt)
-            optimized_title = title_response.text.strip()
-            
-            # Clean up title (remove quotes, extra formatting)
-            optimized_title = self._clean_generated_text(optimized_title)
-            
-            # Ensure title length is reasonable
-            if len(optimized_title) > 100:
+        self.logger.info("🔄 ContentEnhancementAgent: Generating optimized title with retry...")
+        optimized_title_raw = self._call_llm_with_retry(title_prompt)
+
+        primary_term = search_terms[0] if search_terms else "Video Content"
+        fallback_title = f"Complete Guide to {primary_term} - Everything You Need to Know"
+
+        if optimized_title_raw is not None and optimized_title_raw.strip():
+            optimized_title = self._clean_generated_text(optimized_title_raw)
+            if len(optimized_title) > 100: # Max YouTube title length is 100
+                self.logger.warning("Generated title exceeded 100 chars, truncating: %s", optimized_title)
                 optimized_title = optimized_title[:97] + "..."
             
-            print(f"✅ ContentEnhancementAgent: Optimized title generated")
-            return optimized_title
-            
-        except Exception as e:
-            print(f"❌ ContentEnhancementAgent: Error generating title: {e}")
-            # Fallback title
-            primary_term = search_terms[0] if search_terms else "Video Content"
-            return f"Complete Guide to {primary_term} - Everything You Need to Know"
+            if not optimized_title.strip(): # Check if cleaning resulted in empty string
+                self.logger.warning("⚠️ Title became empty after cleaning. Using fallback.")
+                optimized_title = fallback_title
+            else:
+                self.logger.info("✅ ContentEnhancementAgent: Optimized title generated: %s", optimized_title)
+        else:
+            self.logger.error("❌ ContentEnhancementAgent: Failed to generate title after all retries or got empty response. Using fallback.")
+            optimized_title = fallback_title
+            self.logger.info("Using fallback title: %s", optimized_title)
+
+        return optimized_title
 
     def _generate_optimized_description(self, video_summary: str, search_terms: List[str], competitive_insights: Dict, research_data: Dict) -> str:
         """
@@ -271,42 +341,44 @@ TARGET SEARCH TERMS: {', '.join(search_terms)}
 COMPETITIVE EXAMPLES:{competitive_context}
 
 DESCRIPTION REQUIREMENTS:
-1. Start with a compelling hook (first 125 characters are crucial)
-2. Naturally incorporate all search terms throughout the text
-3. Include clear value proposition and what viewers will learn
-4. Use bullet points or sections for readability
-5. Add call-to-action (subscribe, like, comment)
-6. Include relevant hashtags at the end
-7. Maintain authentic tone while being SEO-optimized
-8. Length: 200-300 words optimal
+1. Hook: Start with a compelling hook (first 1-2 sentences, crucial for viewer retention).
+2. Keyword Integration: Naturally incorporate the primary search term early and secondary search terms throughout the text. Avoid keyword stuffing.
+3. Value Proposition: Clearly state what viewers will learn or gain from watching.
+4. Readability: Use bullet points or short paragraphs for key information.
+5. Call to Action: Include a call-to-action (e.g., subscribe, like, comment, check out a link).
+6. Hashtags: Include 3-5 relevant hashtags at the end.
+7. Authenticity: Maintain an authentic and engaging tone.
+8. Length: Aim for 200-300 words.
 
-Structure the description with:
-- Engaging opening paragraph
-- What the video covers
-- Key takeaways/benefits
-- Call to action
-- Relevant hashtags
+Structure the description with the following sections:
+- Engaging opening paragraph (the hook).
+- A brief overview of what the video covers.
+- A "In this video, you'll learn:" or "What to expect:" section with 2-4 bullet points highlighting key takeaways or topics covered.
+- Additional details or context if necessary.
+- Call to action.
+- Relevant hashtags (e.g., #Keyword1 #Keyword2 #VideoTopic).
 
 Generate a complete, ready-to-use YouTube description."""
 
-        try:
-            print("🔄 ContentEnhancementAgent: Generating optimized description...")
-            description_response = Settings.llm.complete(description_prompt)
-            optimized_description = description_response.text.strip()
+        self.logger.info("🔄 ContentEnhancementAgent: Generating optimized description with retry...")
+        optimized_description_raw = self._call_llm_with_retry(description_prompt)
+
+        if optimized_description_raw is not None and optimized_description_raw.strip():
+            optimized_description = self._clean_generated_text(optimized_description_raw)
             
-            # Clean up description
-            optimized_description = self._clean_generated_text(optimized_description)
+            if not optimized_description.strip() or len(optimized_description) < 50: # Basic validity check for description
+                 self.logger.warning("⚠️ Description too short or became empty after cleaning. Length: %d. Using fallback.", len(optimized_description))
+                 optimized_description = self._generate_fallback_description(video_summary, search_terms)
+                 self.logger.info("Generated fallback description for too short/empty main generation.")
+            else:
+                optimized_description = self._enhance_description_formatting(optimized_description, search_terms)
+                self.logger.info("✅ ContentEnhancementAgent: Optimized description generated (length: %d chars)", len(optimized_description))
+        else:
+            self.logger.error("❌ ContentEnhancementAgent: Failed to generate description after all retries or got empty response. Using fallback.")
+            optimized_description = self._generate_fallback_description(video_summary, search_terms)
+            self.logger.info("Generated fallback description due to retry failure.")
             
-            # Ensure proper formatting and add engagement elements
-            optimized_description = self._enhance_description_formatting(optimized_description, search_terms)
-            
-            print(f"✅ ContentEnhancementAgent: Optimized description generated")
-            return optimized_description
-            
-        except Exception as e:
-            print(f"❌ ContentEnhancementAgent: Error generating description: {e}")
-            # Fallback description
-            return self._generate_fallback_description(video_summary, search_terms)
+        return optimized_description
 
     def _clean_generated_text(self, text: str) -> str:
         """
@@ -393,12 +465,26 @@ If you found this content valuable, please like this video and subscribe to our 
 
 # For testing the Content Enhancement Agent
 if __name__ == '__main__':
-    print("🧪 Testing ContentEnhancementAgent...")
-    
-    try:
-        agent = ContentEnhancementAgent()
-        
-        # Test data (simulating Step 4 and Step 5 outputs)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    main_logger = logging.getLogger(__name__)
+    main_logger.info("🧪 Testing ContentEnhancementAgent...")
+
+    load_dotenv() # Ensure .env is loaded for the test script
+    model_endpoint = os.getenv("MODEL_ENDPOINT")
+    model_name = os.getenv("MODEL_NAME")
+    # YOUTUBE_API_KEY is not directly used by this agent for its core LLM calls,
+    # but its input (research_data) comes from YouTubeResearchAgent.
+    # For a focused unit test of ContentEnhancementAgent, only LLM vars are strictly needed.
+
+    if not model_endpoint or not model_name:
+        main_logger.error("🔴 MODEL_ENDPOINT and/or MODEL_NAME environment variables not set. Skipping ContentEnhancementAgent test.")
+        main_logger.info("Ensure .env file exists and these variables are set (e.g., MODEL_ENDPOINT=http://localhost:11434, MODEL_NAME=llama3)")
+    else:
+        main_logger.info("✅ MODEL_ENDPOINT and MODEL_NAME are set. Proceeding with agent test.")
+        try:
+            agent = ContentEnhancementAgent()
+
+            # Test data (simulating Step 4 and Step 5 outputs)
         test_video_summary = """This video provides a comprehensive introduction to artificial intelligence and machine learning. 
         The content covers fundamental concepts, practical applications, and real-world examples of AI implementation. 
         Key topics include neural networks, data processing, and the future potential of AI technology."""
@@ -420,11 +506,11 @@ if __name__ == '__main__':
         
         results = agent.enhance_content(test_video_summary, test_search_terms, test_research_data)
         
-        print(f"✅ Content enhancement completed successfully!")
-        print(f"📝 Optimized Title: {results['optimized_title']}")
-        print(f"📄 Description length: {len(results['optimized_description'])} characters")
-        print(f"📊 Metadata: {results['enhancement_metadata']}")
+        main_logger.info("✅ Content enhancement completed successfully!")
+        main_logger.info("📝 Optimized Title: %s", results['optimized_title'])
+        main_logger.info("📄 Description length: %d characters", len(results['optimized_description']))
+        main_logger.info("📊 Metadata: %s", results['enhancement_metadata'])
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-        print("Make sure MODEL_ENDPOINT and MODEL_NAME are set in your .env file") 
+            main_logger.exception("❌ Test failed: %s", e)
+            main_logger.info("Make sure MODEL_ENDPOINT and MODEL_NAME are set in your .env file (and YOUTUBE_API_KEY if testing full flow).")

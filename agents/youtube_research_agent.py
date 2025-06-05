@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import time
+from datetime import datetime, timezone
 
 class YouTubeResearchAgent:
     """
@@ -35,8 +36,9 @@ class YouTubeResearchAgent:
         
         try:
             self.youtube = build('youtube', 'v3', developerKey=api_key)
-            print(f"✅ YouTubeResearchAgent: YouTube Data API v3 initialized successfully")
+            self.logger.info("✅ YouTubeResearchAgent: YouTube Data API v3 initialized successfully")
         except Exception as e:
+            self.logger.exception("Failed to initialize YouTube API.") # .exception includes stack trace
             raise RuntimeError(f"Failed to initialize YouTube API: {e}")
 
     def research_competitive_content(self, search_terms: List[str], max_results_per_term: int = 5) -> Dict:
@@ -51,10 +53,10 @@ class YouTubeResearchAgent:
             Dictionary containing research data for Step 6 content optimization
         """
         if not search_terms:
-            print("⚠️ No search terms provided for YouTube research")
+            self.logger.warning("⚠️ No search terms provided for YouTube research")
             return self._empty_research_result()
         
-        print(f"🔍 YouTubeResearchAgent: Starting research for {len(search_terms)} search terms")
+        self.logger.info("🔍 YouTubeResearchAgent: Starting research for %d search terms", len(search_terms))
         
         all_research_data = {
             "research_summary": {
@@ -69,24 +71,24 @@ class YouTubeResearchAgent:
         all_videos = []
         
         for term in search_terms:
-            print(f"🔎 Researching: '{term}'")
+            self.logger.info("🔎 Researching: '%s'", term)
             try:
                 term_data = self._research_single_term(term, max_results_per_term)
                 all_research_data["term_results"][term] = term_data
                 all_videos.extend(term_data["videos"])
                 
                 # Rate limiting - YouTube API has quotas
-                time.sleep(0.5)
+                time.sleep(0.5) # No logging for sleep
                 
             except Exception as e:
-                print(f"❌ Error researching term '{term}': {e}")
+                self.logger.error("❌ Error researching term '%s': %s", term, e, exc_info=True)
                 all_research_data["term_results"][term] = self._empty_term_result()
         
         # Generate competitive analysis
-        all_research_data["competitive_analysis"] = self._analyze_competitive_data(all_videos)
+        all_research_data["competitive_analysis"] = self._analyze_competitive_data(all_videos) # This method uses self.logger internally
         all_research_data["research_summary"]["total_videos_analyzed"] = len(all_videos)
         
-        print(f"✅ YouTubeResearchAgent: Research complete - analyzed {len(all_videos)} videos")
+        self.logger.info("✅ YouTubeResearchAgent: Research complete - analyzed %d videos", len(all_videos))
         return all_research_data
 
     def _research_single_term(self, search_term: str, max_results: int) -> Dict:
@@ -136,7 +138,7 @@ class YouTubeResearchAgent:
             }
             
         except HttpError as e:
-            print(f"YouTube API error for term '{search_term}': {e}")
+            self.logger.error("YouTube API error for term '%s': %s", search_term, e, exc_info=True)
             return self._empty_term_result()
 
     def _extract_video_data(self, video_item: Dict) -> Optional[Dict]:
@@ -177,7 +179,7 @@ class YouTubeResearchAgent:
             }
             
         except (KeyError, ValueError, TypeError) as e:
-            print(f"Error extracting video data: {e}")
+            self.logger.warning("Error extracting video data for video ID '%s': %s", video_item.get('id', 'Unknown ID'), e)
             return None
 
     def _analyze_competitive_data(self, all_videos: List[Dict]) -> Dict:
@@ -192,26 +194,102 @@ class YouTubeResearchAgent:
         """
         if not all_videos:
             return {
+                "total_videos_analyzed": 0, # Ensure this key is present for consistency
                 "average_views": 0,
                 "average_engagement_rate": 0,
                 "top_performing_videos": [],
-                "common_title_patterns": [],
+                "common_title_words": [],
                 "channel_analysis": {}
             }
-        
-        # Calculate averages
-        total_views = sum(video['view_count'] for video in all_videos)
-        total_engagement = sum(video['engagement_rate'] for video in all_videos)
-        
-        average_views = total_views / len(all_videos)
-        average_engagement_rate = total_engagement / len(all_videos)
-        
-        # Find top performing videos (by engagement rate)
-        top_videos = sorted(all_videos, key=lambda x: x['engagement_rate'], reverse=True)[:3]
-        
-        # Analyze title patterns
-        title_words = []
+
+        # --- Data Preparation and Recency Calculation ---
+        view_counts = []
+        engagement_rates = []
+        days_since_published_list = []
+
         for video in all_videos:
+            try:
+                # Parse published_at string to datetime object
+                published_date_str = video.get('published_at')
+                if published_date_str:
+                    # Handle 'Z' for UTC and make it offset-aware
+                    published_date = datetime.fromisoformat(published_date_str.replace('Z', '+00:00'))
+                    # Calculate days_since_published
+                    days_diff = (datetime.now(timezone.utc) - published_date).days
+                    video['days_since_published'] = days_diff
+                    days_since_published_list.append(days_diff)
+                else:
+                    # Assign a high value for days_since_published if no date, making it less recent
+                    video['days_since_published'] = 365 * 10 # Default to 10 years old
+                    days_since_published_list.append(365 * 10)
+
+                view_counts.append(video.get('view_count', 0))
+                engagement_rates.append(video.get('engagement_rate', 0.0))
+            except Exception as e:
+                self.logger.error(f"Error processing video data for recency/normalization: {video.get('video_id')}, {e}")
+                # Assign default values if processing fails for a video
+                video['days_since_published'] = 365 * 10
+                if video.get('view_count') is None : view_counts.append(0) # Check if key exists before appending
+                else: view_counts.append(video.get('view_count',0))
+
+                if video.get('engagement_rate') is None : engagement_rates.append(0.0)
+                else: engagement_rates.append(video.get('engagement_rate',0.0))
+
+                days_since_published_list.append(365*10) # Ensure list has an entry
+
+        # Calculate overall averages (remains based on all videos)
+        total_views_sum = sum(video['view_count'] for video in all_videos) # Renamed for clarity
+        total_engagement_sum = sum(video['engagement_rate'] for video in all_videos) # Renamed for clarity
+        
+        average_views = total_views_sum / len(all_videos) if all_videos else 0
+        average_engagement_rate = total_engagement_sum / len(all_videos) if all_videos else 0
+
+        # --- Normalization (values needed for next block) ---
+        min_views = min(view_counts) if view_counts else 0
+        max_views = max(view_counts) if view_counts else 0
+        min_engagement = min(engagement_rates) if engagement_rates else 0
+        max_engagement = max(engagement_rates) if engagement_rates else 0
+        min_days = min(days_since_published_list) if days_since_published_list else 0
+        max_days = max(days_since_published_list) if days_since_published_list else 0
+        
+        # --- Normalization Loop ---
+        for video in all_videos:
+            # Views
+            if max_views > min_views:
+                video['normalized_views'] = (video.get('view_count', 0) - min_views) / (max_views - min_views)
+            else:
+                video['normalized_views'] = 0.5 # Neutral value if all views are same or no views
+
+            # Engagement
+            if max_engagement > min_engagement:
+                video['normalized_engagement'] = (video.get('engagement_rate', 0.0) - min_engagement) / (max_engagement - min_engagement)
+            else:
+                video['normalized_engagement'] = 0.5 # Neutral value
+
+            # Recency (1 - normalized_days, so higher is better/more recent)
+            days_published = video.get('days_since_published', max_days) # Default to max_days if somehow missing
+            if max_days > min_days:
+                video['normalized_recency'] = 1 - ((days_published - min_days) / (max_days - min_days))
+            else:
+                video['normalized_recency'] = 0.5 # Neutral value
+
+        # --- Scoring and Sorting ---
+        w_views = 0.4
+        w_engagement = 0.4
+        w_recency = 0.2
+
+        for video in all_videos:
+            video['composite_score'] = (video.get('normalized_views', 0) * w_views) + \
+                                     (video.get('normalized_engagement', 0) * w_engagement) + \
+                                     (video.get('normalized_recency', 0) * w_recency)
+        
+        # Sort by composite_score to find top performing videos
+        sorted_videos = sorted(all_videos, key=lambda x: x.get('composite_score', 0), reverse=True)
+        top_videos = sorted_videos[:3] # Select the top 3 videos based on composite score
+        
+        # Analyze title patterns (uses all_videos, which is correct)
+        title_words = []
+        for video in all_videos: # This loop should remain to analyze all titles
             words = video['title'].lower().split()
             title_words.extend(words)
         
@@ -275,7 +353,7 @@ class YouTubeResearchAgent:
                 "average_views": 0,
                 "average_engagement_rate": 0,
                 "top_performing_videos": [],
-                "common_title_patterns": [],
+                "common_title_words": [], # Changed for consistency
                 "channel_analysis": {}
             }
         }
@@ -291,12 +369,24 @@ class YouTubeResearchAgent:
 
 # For testing the YouTube Research Agent
 if __name__ == '__main__':
-    print("🧪 Testing YouTubeResearchAgent...")
-    
-    try:
-        agent = YouTubeResearchAgent()
-        
-        # Test with sample search terms (like those from Step 4)
+    # Basic logging for the test script itself
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    main_logger = logging.getLogger(__name__) # Use a logger for the test script
+
+    main_logger.info("🧪 Testing YouTubeResearchAgent...")
+
+    load_dotenv() # Ensure .env is loaded for the test script
+    youtube_api_key = os.getenv("YOUTUBE_API_KEY")
+
+    if not youtube_api_key:
+        main_logger.error("🔴 YOUTUBE_API_KEY environment variable not set. Skipping YouTubeResearchAgent test.")
+        main_logger.info("Ensure .env file exists and YOUTUBE_API_KEY is set.")
+    else:
+        main_logger.info("✅ YOUTUBE_API_KEY is set. Proceeding with agent test.")
+        try:
+            agent = YouTubeResearchAgent()
+
+            # Test with sample search terms (like those from Step 4)
         test_search_terms = [
             "AI tutorial for beginners",
             "machine learning explained",
@@ -305,11 +395,11 @@ if __name__ == '__main__':
         
         research_results = agent.research_competitive_content(test_search_terms, max_results_per_term=3)
         
-        print(f"✅ Research completed successfully!")
-        print(f"📊 Total videos analyzed: {research_results['research_summary']['total_videos_analyzed']}")
-        print(f"📈 Average views: {research_results['competitive_analysis']['average_views']:,}")
-        print(f"🎯 Average engagement rate: {research_results['competitive_analysis']['average_engagement_rate']:.4f}%")
+        main_logger.info("✅ Research completed successfully!")
+        main_logger.info("📊 Total videos analyzed: %d", research_results['research_summary']['total_videos_analyzed'])
+        main_logger.info("📈 Average views: %s", f"{research_results['competitive_analysis']['average_views']:,}")
+        main_logger.info("🎯 Average engagement rate: %.4f%%", research_results['competitive_analysis']['average_engagement_rate'])
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-        print("Make sure YOUTUBE_API_KEY is set in your .env file") 
+            main_logger.exception("❌ Test failed: %s", e) # Use logger.exception for errors in test
+            main_logger.info("Make sure YOUTUBE_API_KEY is set in your .env file and is valid.")

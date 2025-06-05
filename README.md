@@ -59,16 +59,105 @@ For detailed project information, workflow process, and technical specifications
    modal deploy modal_functions.py
    ```
    
-   This will deploy both functions:
-   - `process_video_to_audio` (FFmpeg audio extraction)
-   - `transcribe_audio_with_whisper` (Whisper AI transcription with A10G GPU)
+   This will deploy the Modal functions required for video processing (audio extraction, transcription) and potentially thumbnail generation if you configure `modal_functions.py` for it.
 
-4. **Run the Gradio application**:
+4. **Configure Environment Variables**:
+   Before running the application, you need to set up your local environment variables.
+   Copy the `.env.example` file to a new file named `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   Now, edit the `.env` file with your specific configurations (Ollama endpoint, model name, Whisper model size, YouTube API key). Details on these variables are in the "AI Model Configuration" section below and within the `.env.example` file itself.
+
+5. **Run the Gradio application**:
    ```bash
    python app.py
    ```
    
    The application will be available at: http://localhost:7860
+
+## AI Model Configuration
+
+The application utilizes AI models for several key tasks:
+- **Text Generation (Summaries, Titles, Descriptions, etc.):** Handled by a model accessed via Ollama.
+- **Audio Transcription:** Handled by OpenAI's Whisper model.
+
+Configuring these appropriately is crucial for the application's performance and output quality.
+
+### Ollama Configuration (for Text Generation)
+
+The application leverages an Ollama model for various text generation tasks, including:
+- Video summaries
+- YouTube search term generation
+- Optimized video titles
+- Optimized video descriptions
+
+The quality of these generated texts is highly dependent on the Ollama model you use.
+
+### Environment Variables for Ollama:
+
+You **must** configure these in your `.env` file:
+
+-   `MODEL_ENDPOINT`: This is the base URL for your Ollama server.
+    -   If you are running Ollama locally (recommended for ease of use), this will typically be `http://localhost:11434`.
+    -   If you have deployed Ollama to a different server or are using a cloud-hosted Ollama instance (e.g., via Modal for Ollama specifically), use that URL.
+-   `MODEL_NAME`: This is the specific model identifier that Ollama will use.
+    -   You need to have this model downloaded in your Ollama instance (e.g., by running `ollama pull llama3`).
+
+### Recommended Models:
+
+For optimal performance and generation quality, we strongly recommend using modern, capable, instruction-tuned models. Older or smaller models might produce suboptimal or poorly formatted results.
+
+Good choices include (but are not limited to):
+-   `llama3` (or specific versions like `llama3:8b`, `llama3:70b`)
+-   `llama3:instruct` (or specific versions like `llama3:8b-instruct`)
+-   `mistral` (or `mistral:instruct`)
+-   Other recent, high-performing models available through Ollama.
+
+**Example `.env` configuration:**
+```
+MODEL_ENDPOINT=http://localhost:11434
+MODEL_NAME=llama3:8b-instruct
+```
+
+Always ensure the chosen `MODEL_NAME` is available in your Ollama setup. You can list your downloaded models using `ollama list`.
+
+### YouTube API Key:
+
+Additionally, for the YouTube competitive research functionality (Step 5), you'll need to configure:
+
+-   `YOUTUBE_API_KEY`: Your Google Cloud YouTube Data API v3 key. This should also be added to your `.env` file. If this key is not provided, the YouTube research step will be skipped. Refer to the `.env.example` file for the exact variable name.
+
+### Whisper Model Configuration (for Transcription)
+
+The application uses OpenAI's Whisper model for audio transcription. You can configure the size of the Whisper model used, which impacts a trade-off between transcription accuracy, speed, and resource consumption.
+
+**Environment Variable:**
+
+-   `WHISPER_MODEL_SIZE`: Specifies the Whisper model size. This variable should be set in your `.env` file.
+    -   **Default:** `small` (if the variable is not set).
+
+**Common Model Sizes & Trade-offs:**
+
+-   **Smaller models** (e.g., `tiny`, `base`, `small`):
+    -   Faster processing.
+    -   Lower resource consumption (CPU, GPU memory, RAM).
+    -   Generally lower transcription accuracy, especially with noisy audio or strong accents.
+-   **Larger models** (e.g., `medium`, `large`, `large-v1`, `large-v2`, `large-v3`):
+    -   Higher transcription accuracy.
+    -   Slower processing.
+    -   Higher resource consumption. `large-v3` is currently the most accurate.
+
+We recommend starting with `small` for a balance. If higher accuracy is needed and you have sufficient resources, try `medium` or `large-v3`.
+
+**Example `.env` configuration:**
+```
+WHISPER_MODEL_SIZE=medium
+```
+
+**Resource Note for Modal Users:**
+Using larger Whisper models (especially `large`, `large-v2`, `large-v3`) on Modal may require more processing time and could potentially approach the default timeout or memory limits if not already configured for larger tasks. The current Modal function for transcription (`transcribe_audio_with_whisper`) is configured with a timeout of 900 seconds (15 minutes) and 12GB of RAM, which should generally accommodate up to `large-v3`, but performance can vary based on audio length and complexity. If you encounter issues, consider using a smaller model or adjusting the Modal function's resource allocation.
+
 
 ## Modal Deployment Details
 

@@ -3,8 +3,29 @@ import os
 import modal
 from llama_index.core import Settings # Added for checking Settings.llm
 
-# Try to import and connect to Modal, but gracefully handle if not available
+from PIL import Image, ImageDraw, ImageFont
+import base64
+import io
+from dotenv import load_dotenv
+import logging
+import sys
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+# --- End Logging Configuration ---
+
+# --- Global Configuration & Environment Variables ---
+load_dotenv() # Load environment variables from .env file
+
 MODAL_AVAILABLE = False
+SELECTED_WHISPER_MODEL = os.getenv("WHISPER_MODEL_SIZE", "small").strip().lower()
+logger.info("🎙️ Using Whisper model size: %s (configurable via WHISPER_MODEL_SIZE env var)", SELECTED_WHISPER_MODEL)
+# --- End Global Configuration ---
 
 # Note: Step 4 is implemented via ContentAnalysisAgent in agents/ directory
 # No need for separate src.step4_content_analysis module
@@ -15,11 +36,11 @@ try:
     transcribe_audio_with_whisper = modal.Function.from_name("youtube-content-optimizer", "transcribe_audio_with_whisper")
     generate_thumbnails = modal.Function.from_name("youtube-content-optimizer", "generate_thumbnails")
     MODAL_AVAILABLE = True
-    print("✅ Modal connection established!")
-    print("✅ Thumbnail generation function loaded!")
+    logger.info("✅ Modal connection established!")
+    logger.info("✅ Thumbnail generation function loaded!")
 except Exception as e:
-    print(f"⚠️ Modal not available: {e}")
-    print("🔄 Running in demo mode without Modal processing")
+    logger.warning("⚠️ Modal not available: %s", e)
+    logger.info("🔄 Running in demo mode without Modal processing")
     MODAL_AVAILABLE = False
 
 # Step 4 initialization is handled by ContentAnalysisAgent class
@@ -29,16 +50,16 @@ try:
     from agents.content_analysis_agent import ContentAnalysisAgent
     STEP4_AGENT_AVAILABLE = True
     content_analyzer = None 
-    print("✅ Step 4 (ContentAnalysisAgent) class loaded.")
+    logger.info("✅ Step 4 (ContentAnalysisAgent) class loaded.")
 except ImportError as e:
-    print(f"⚠️ Step 4 Agent (agents.content_analysis_agent) not found or import error: {e}. Content analysis will be skipped.")
+    logger.warning("⚠️ Step 4 Agent (agents.content_analysis_agent) not found or import error: %s. Content analysis will be skipped.", e)
     STEP4_AGENT_AVAILABLE = False
     # Define a dummy class and instance if not available so the app can run
     class ContentAnalysisAgent:
         def __init__(self):
-            print("Dummy ContentAnalysisAgent initialized.")
+            logger.info("Dummy ContentAnalysisAgent initialized.")
         def analyze_transcript(self, transcript: str):
-            print("Dummy ContentAnalysisAgent.analyze_transcript called.")
+            logger.info("Dummy ContentAnalysisAgent.analyze_transcript called.")
             return {
                 "video_summary": "[Content analysis agent not available]",
                 "search_terms": []
@@ -50,9 +71,9 @@ try:
     from agents.youtube_research_agent import YouTubeResearchAgent
     STEP5_AGENT_AVAILABLE = True
     youtube_researcher = None
-    print("✅ Step 5 (YouTubeResearchAgent) class loaded.")
+    logger.info("✅ Step 5 (YouTubeResearchAgent) class loaded.")
 except ImportError as e:
-    print(f"⚠️ Step 5 Agent (agents.youtube_research_agent) not found or import error: {e}. YouTube research will be skipped.")
+    logger.warning("⚠️ Step 5 Agent (agents.youtube_research_agent) not found or import error: %s. YouTube research will be skipped.", e)
     STEP5_AGENT_AVAILABLE = False
     youtube_researcher = None
 
@@ -61,9 +82,9 @@ try:
     from agents.content_enhancement_agent import ContentEnhancementAgent
     STEP6_AGENT_AVAILABLE = True
     content_enhancer = None
-    print("✅ Step 6 (ContentEnhancementAgent) class loaded.")
+    logger.info("✅ Step 6 (ContentEnhancementAgent) class loaded.")
 except ImportError as e:
-    print(f"⚠️ Step 6 Agent (agents.content_enhancement_agent) not found or import error: {e}. Content enhancement will be skipped.")
+    logger.warning("⚠️ Step 6 Agent (agents.content_enhancement_agent) not found or import error: %s. Content enhancement will be skipped.", e)
     STEP6_AGENT_AVAILABLE = False
     content_enhancer = None
 
@@ -72,16 +93,16 @@ if not MODAL_AVAILABLE:
     # Initialize ContentAnalysisAgent
     if STEP4_AGENT_AVAILABLE:
         try:
-            print("🔄 Initializing ContentAnalysisAgent for local Step 4 processing...")
+            logger.info("🔄 Initializing ContentAnalysisAgent for local Step 4 processing...")
             content_analyzer = ContentAnalysisAgent()
-            print("✅ ContentAnalysisAgent initialized for local use.")
+            logger.info("✅ ContentAnalysisAgent initialized for local use.")
         except Exception as e:
-            print(f"⚠️ Error initializing ContentAnalysisAgent for local Step 4: {e}. Step 4 might fail.")
+            logger.error("⚠️ Error initializing ContentAnalysisAgent for local Step 4: %s. Step 4 might fail.", e, exc_info=True)
             # Fallback to dummy if initialization fails
             if not isinstance(content_analyzer, ContentAnalysisAgent) or content_analyzer is None:
-                class ContentAnalysisAgent_Dummy:
+                class ContentAnalysisAgent_Dummy: # This class is already defined above, maybe reuse or ensure scope
                     def __init__(self):
-                        print("Fallback Dummy ContentAnalysisAgent initialized after error.")
+                        logger.info("Fallback Dummy ContentAnalysisAgent initialized after error during local init.")
                     def analyze_transcript(self, transcript: str):
                         return {"video_summary": "[Content analysis agent failed to initialize]", "search_terms": []}
                 content_analyzer = ContentAnalysisAgent_Dummy()
@@ -89,21 +110,21 @@ if not MODAL_AVAILABLE:
     # Initialize YouTubeResearchAgent
     if STEP5_AGENT_AVAILABLE:
         try:
-            print("🔄 Initializing YouTubeResearchAgent for Step 5 processing...")
+            logger.info("🔄 Initializing YouTubeResearchAgent for Step 5 processing...")
             youtube_researcher = YouTubeResearchAgent()
-            print("✅ YouTubeResearchAgent initialized.")
+            logger.info("✅ YouTubeResearchAgent initialized.")
         except Exception as e:
-            print(f"⚠️ Error initializing YouTubeResearchAgent: {e}. Step 5 will be skipped.")
+            logger.error("⚠️ Error initializing YouTubeResearchAgent: %s. Step 5 will be skipped.", e, exc_info=True)
             youtube_researcher = None
     
     # Initialize ContentEnhancementAgent
     if STEP6_AGENT_AVAILABLE:
         try:
-            print("🔄 Initializing ContentEnhancementAgent for Step 6 processing...")
+            logger.info("🔄 Initializing ContentEnhancementAgent for Step 6 processing...")
             content_enhancer = ContentEnhancementAgent()
-            print("✅ ContentEnhancementAgent initialized.")
+            logger.info("✅ ContentEnhancementAgent initialized.")
         except Exception as e:
-            print(f"⚠️ Error initializing ContentEnhancementAgent: {e}. Step 6 will be skipped.")
+            logger.error("⚠️ Error initializing ContentEnhancementAgent: %s. Step 6 will be skipped.", e, exc_info=True)
             content_enhancer = None
 
 def format_youtube_research_results(research_data: dict, search_terms: list) -> str:
@@ -179,11 +200,34 @@ def process_video(video_file):
 
     if video_file is None:
         return "Please upload a video file.", "", "", "", "", "", None, None, None
+
+    # --- Font Handling ---
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Common on Linux
+        "Arial.ttf",  # Common on Windows (may need to be in the same dir or adjust path)
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf", # Common on macOS
+        "sans-serif.ttf" # A generic fallback if available
+    ]
+    font_size = 60 # Initial font size, can be adjusted
+    font = None
+    for font_path in font_paths:
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+            logger.info("Successfully loaded font: %s", font_path)
+            break
+        except IOError:
+            logger.debug("Font not found at %s, trying next.", font_path)
+
+    if not font:
+        logger.warning("Default fonts not found. Using PIL default font. Text quality may be suboptimal.")
+        font = ImageFont.load_default() # Fallback to PIL's default
+    # --- End Font Handling ---
     
     try:
         if MODAL_AVAILABLE:
             # Step 1: Video Upload Processing
             status = "🔄 Step 1/7: Processing video... Uploading to Modal for audio extraction"
+            logger.info(status)
             
             # Read video file
             with open(video_file, "rb") as f:
@@ -191,7 +235,7 @@ def process_video(video_file):
             
             filename = os.path.basename(video_file)
             
-            print(f"📤 Sending video to Modal for processing...")
+            logger.info("📤 Sending video to Modal for processing: %s", filename)
             
             # Step 2: Audio Extraction
             audio_bytes, audio_filename = process_video_to_audio.remote(video_bytes, filename)
@@ -199,8 +243,12 @@ def process_video(video_file):
             status = f"✅ Step 2/7: Audio extraction successful! File: {audio_filename} ({len(audio_bytes) / (1024*1024):.1f} MB)\n🔄 Step 3/7: Starting Whisper transcription..."
             
             # Step 3: Whisper Transcription
-            print(f"🎙️ Sending audio to Whisper for transcription...")
-            transcription_data = transcribe_audio_with_whisper.remote(audio_bytes, audio_filename)
+            logger.info("🎙️ Sending audio to Whisper for transcription (using model: %s)...", SELECTED_WHISPER_MODEL)
+            transcription_data = transcribe_audio_with_whisper.remote(
+                audio_bytes,
+                audio_filename,
+                whisper_model_size=SELECTED_WHISPER_MODEL # Pass the selected model size
+            )
             
             # Extract transcription details
             transcript_text = transcription_data["text"]
@@ -215,15 +263,16 @@ def process_video(video_file):
             search_terms = []
 
             if STEP4_AGENT_AVAILABLE:
-                if content_analyzer is None:
-                    print("Attempting to initialize ContentAnalysisAgent for Modal context...")
+                if content_analyzer is None: # Should ideally be initialized already if available
+                    logger.warning("ContentAnalysisAgent was None in Modal flow, attempting re-initialization.")
                     try:
                         content_analyzer = ContentAnalysisAgent()
                     except Exception as e_agent_init:
-                        print(f"Error initializing agent in modal context: {e_agent_init}")
+                        logger.error("Error re-initializing ContentAnalysisAgent in modal context: %s", e_agent_init, exc_info=True)
                         # Fallback to a dummy to prevent crash
-                        class ContentAnalysisAgent_Dummy_Modal:
+                        class ContentAnalysisAgent_Dummy_Modal: # Ensure this class is defined or handled properly
                             def analyze_transcript(self, transcript: str):
+                                logger.info("Dummy ContentAnalysisAgent_Dummy_Modal used.")
                                 return {"video_summary": "[Content analysis agent failed to initialize in Modal]", "search_terms": []}
                         content_analyzer = ContentAnalysisAgent_Dummy_Modal()
                 
@@ -247,17 +296,18 @@ def process_video(video_file):
                     try:
                         youtube_researcher = YouTubeResearchAgent()
                     except Exception as e:
-                        print(f"Error initializing YouTubeResearchAgent: {e}")
+                        logger.error("Error initializing YouTubeResearchAgent in Modal flow: %s", e, exc_info=True)
                         youtube_researcher = None
                 
                 if youtube_researcher:
                     try:
                         research_data = youtube_researcher.research_competitive_content(search_terms)
-                        videos_analyzed = research_data["research_summary"]["total_videos_analyzed"]
-                        avg_views = research_data["competitive_analysis"]["average_views"]
-                        status += f"\n✅ Step 5/6: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
+                        videos_analyzed = research_data.get("research_summary", {}).get("total_videos_analyzed", 0)
+                        avg_views = research_data.get("competitive_analysis", {}).get("average_views", 0)
+                        status += f"\n✅ Step 5/7: YouTube research complete! Analyzed {videos_analyzed} videos (avg views: {avg_views:,})"
+                        logger.info("YouTube research complete. Analyzed %d videos.", videos_analyzed)
                     except Exception as e:
-                        print(f"Error during YouTube research: {e}")
+                        logger.error("Error during YouTube research: %s", e, exc_info=True)
                         status += f"\n❌ Step 5/7: YouTube research failed: {str(e)}"
                         research_data = {}
                 else:
@@ -278,7 +328,7 @@ def process_video(video_file):
                     try:
                         content_enhancer = ContentEnhancementAgent()
                     except Exception as e:
-                        print(f"Error initializing ContentEnhancementAgent: {e}")
+                        logger.error("Error initializing ContentEnhancementAgent in Modal flow: %s", e, exc_info=True)
                         content_enhancer = None
                 
                 if content_enhancer:
@@ -288,19 +338,18 @@ def process_video(video_file):
                         )
                         optimized_title = enhancement_results["optimized_title"]
                         optimized_description = enhancement_results["optimized_description"]
-                        metadata = enhancement_results["enhancement_metadata"]
+                        metadata = enhancement_results.get("enhancement_metadata", {}) # Ensure metadata exists
                         
-                        status += f"\n✅ Step 6/6: Content enhancement complete!"
-                        status += f"\n📊 Enhancement Stats: {metadata['competitive_videos_analyzed']} videos analyzed, "
-                        status += f"avg competitor views: {metadata['avg_competitor_views']:,}, "
-                        status += f"avg engagement: {metadata['avg_engagement_rate']:.2f}%"
-                        if metadata.get('successful_patterns'):
-                            status += f"\n🎯 Applied patterns: {', '.join(metadata['successful_patterns'][:2])}"
-                        if metadata.get('top_keywords'):
-                            status += f"\n🔑 Key trending words: {', '.join(metadata['top_keywords'][:4])}"
+                        status += f"\n✅ Step 6/7: Content enhancement complete!"
+                        logger.info("Content enhancement complete.")
+                        # Example of logging some metadata, adapt as needed
+                        logger.info("Enhancement metadata: Analyzed %d competitor videos, Avg views: %s",
+                                    metadata.get('competitive_videos_analyzed', 0),
+                                    metadata.get('avg_competitor_views', 0))
+                        # status string updates can remain for UI, or be built from logger messages if desired
                     except Exception as e:
-                        print(f"Error during content enhancement: {e}")
-                        status += f"\n❌ Step 6/6: Content enhancement failed: {str(e)}"
+                        logger.error("Error during content enhancement: %s", e, exc_info=True)
+                        status += f"\n❌ Step 6/7: Content enhancement failed: {str(e)}"
                 else:
                     status += "\n⚠️ Step 6/6: Content enhancement skipped (agent initialization failed)."
             else:
@@ -317,9 +366,8 @@ def process_video(video_file):
             
             try:
                 if optimized_title and video_summary:
-                    print(f"🎨 Generating thumbnails with context: title={optimized_title[:50]}...")
+                    logger.info("🎨 Generating thumbnails with context: title=%s...", optimized_title[:50])
                     
-                    # Generate thumbnails using all available context
                     thumbnail_results = generate_thumbnails.remote(
                         video_summary=video_summary,
                         optimized_title=optimized_title,
@@ -328,46 +376,119 @@ def process_video(video_file):
                         competitive_analysis=research_data
                     )
                     
-                    # Process thumbnail results
-                    if thumbnail_results and len(thumbnail_results) >= 3:
-                        import base64
-                        import io
-                        from PIL import Image
-                        
-                        # Convert base64 images to PIL Images for Gradio display
-                        for i, thumbnail_data in enumerate(thumbnail_results[:3]):
-                            if thumbnail_data.get("image_data"):
+                    if thumbnail_results and len(thumbnail_results) > 0: # Check if any results
+                        processed_images = 0
+                        for i, thumbnail_data in enumerate(thumbnail_results[:3]): # Process up to 3
+                            pil_image = None
+                            if thumbnail_data and thumbnail_data.get("image_data"):
                                 try:
                                     image_bytes = base64.b64decode(thumbnail_data["image_data"])
-                                    image = Image.open(io.BytesIO(image_bytes))
+                                    pil_image = Image.open(io.BytesIO(image_bytes))
+
+                                    if pil_image and optimized_title and font:
+                                        pil_image = pil_image.convert("RGBA")
+                                        draw = ImageDraw.Draw(pil_image)
+                                        text_to_overlay = optimized_title
+                                        current_font_size_local = font_size # Use a local copy for dynamic resizing per image
+
+                                        if len(text_to_overlay) > 50:
+                                            words = text_to_overlay.split()
+                                            if len(words) > 6:
+                                                mid_point = len(words) // 2
+                                                line1 = " ".join(words[:mid_point])
+                                                line2 = " ".join(words[mid_point:])
+                                                if len(line1) < 30 and len(line2) < 30:
+                                                    text_to_overlay = f"{line1}\n{line2}"
+                                                else:
+                                                    text_to_overlay = " ".join(words[:7]) + "..."
+                                            else:
+                                                text_to_overlay = text_to_overlay[:47] + "..."
+
+                                        current_font_object_local = font
+                                        if hasattr(font, "path") and font.path:
+                                            try:
+                                                current_font_object_local = ImageFont.truetype(font.path, current_font_size_local)
+                                            except IOError:
+                                                logger.warning("Could not reload font %s at size %d. Using default.", font.path, current_font_size_local)
+                                                current_font_object_local = ImageFont.load_default()
+                                        else:
+                                            current_font_object_local = ImageFont.load_default()
+
+                                        text_bbox = draw.textbbox((0, 0), text_to_overlay, font=current_font_object_local)
+                                        text_width = text_bbox[2] - text_bbox[0]
+                                        text_height = text_bbox[3] - text_bbox[1]
+                                        image_width, image_height = pil_image.size
+
+                                        while text_width > image_width * 0.9 and current_font_size_local > 20:
+                                            current_font_size_local -= 5
+                                            if hasattr(font, "path") and font.path:
+                                                try:
+                                                    current_font_object_local = ImageFont.truetype(font.path, current_font_size_local)
+                                                except IOError:
+                                                    logger.warning("Could not reload font %s at size %d during resize. Using default.", font.path, current_font_size_local)
+                                                    current_font_object_local = ImageFont.load_default()
+                                                    break
+                                            else:
+                                                current_font_object_local = ImageFont.load_default()
+                                                logger.debug("Using default font, cannot dynamically resize further in this loop.")
+                                                break
+                                            text_bbox = draw.textbbox((0, 0), text_to_overlay, font=current_font_object_local)
+                                            text_width = text_bbox[2] - text_bbox[0]
+                                            text_height = text_bbox[3] - text_bbox[1]
+
+                                        x = (image_width - text_width) / 2
+                                        y = image_height * 0.8 - (text_height / 2)
+                                        padding = 10
+                                        rect_x0 = max(0, x - padding)
+                                        rect_y0 = max(0, y - padding - (text_height * (text_to_overlay.count('\n')) * 0.1))
+                                        rect_x1 = min(image_width, x + text_width + padding)
+                                        rect_y1 = min(image_height, y + text_height + padding + (text_height * (text_to_overlay.count('\n')) * 0.1))
+
+                                        rect_img = Image.new('RGBA', pil_image.size, (255, 255, 255, 0))
+                                        rect_draw = ImageDraw.Draw(rect_img)
+                                        rect_draw.rectangle((rect_x0, rect_y0, rect_x1, rect_y1), fill=(0, 0, 0, 180))
+                                        pil_image = Image.alpha_composite(pil_image, rect_img)
+                                        draw = ImageDraw.Draw(pil_image)
+
+                                        try:
+                                            draw.text((x + text_width / 2, y + text_height / 2), text_to_overlay, font=current_font_object_local, fill=(255, 255, 255, 255), anchor="mm", align="center")
+                                        except TypeError:
+                                            num_lines = text_to_overlay.count('\n') + 1
+                                            adjusted_y = y - (text_height / num_lines) * (num_lines -1) / 2
+                                            draw.text((x, adjusted_y), text_to_overlay, font=current_font_object_local, fill=(255, 255, 255, 255), align="center")
                                     
-                                    if i == 0:
-                                        thumbnail1_data = image
-                                    elif i == 1:
-                                        thumbnail2_data = image
-                                    elif i == 2:
-                                        thumbnail3_data = image
+                                    if i == 0: thumbnail1_data = pil_image
+                                    elif i == 1: thumbnail2_data = pil_image
+                                    elif i == 2: thumbnail3_data = pil_image
+                                    processed_images +=1
                                         
                                 except Exception as img_error:
-                                    print(f"❌ Error processing thumbnail {i+1}: {img_error}")
-                        
-                        successful_thumbnails = len([t for t in thumbnail_results if t.get("image_data")])
-                        status += f"\n✅ Step 7/7: Thumbnail generation complete! Generated {successful_thumbnails}/3 thumbnails"
-                        
-                        # Add thumbnail generation details
-                        concepts_used = thumbnail_results[0].get("concepts", [])
-                        if concepts_used:
-                            status += f"\n🎯 Key concepts used: {', '.join(concepts_used[:5])}"
+                                    logger.error("❌ Error processing or overlaying text on thumbnail %d: %s", i+1, img_error, exc_info=True)
+                                    if pil_image: # if image was decoded but overlay failed
+                                        if i == 0: thumbnail1_data = pil_image
+                                        elif i == 1: thumbnail2_data = pil_image
+                                        elif i == 2: thumbnail3_data = pil_image
+                            elif thumbnail_data and thumbnail_data.get("error"): # If Modal function returned an error for this thumbnail
+                                logger.error("Thumbnail generation for style '%s' failed: %s", thumbnail_data.get('style', 'unknown'), thumbnail_data.get('error'))
+
+
+                        status += f"\n✅ Step 7/7: Thumbnail generation and text overlay (attempted) complete! Generated {processed_images}/{len(thumbnail_results)} successfully."
+                        if thumbnail_results[0] and thumbnail_results[0].get("concepts"): # Check if first result exists
+                            concepts_used = thumbnail_results[0].get("concepts", [])
+                            if concepts_used:
+                                status += f"\n🎯 Key concepts used for thumbnails: {', '.join(concepts_used[:5])}"
                     else:
-                        status += "\n⚠️ Step 7/7: Thumbnail generation returned unexpected format"
+                        status += "\n⚠️ Step 7/7: Thumbnail generation returned no results or unexpected format."
+                        logger.warning("Thumbnail generation returned no results or unexpected format.")
                 else:
-                    status += "\n⚠️ Step 7/7: Thumbnail generation skipped (missing title or summary)"
+                    status += "\n⚠️ Step 7/7: Thumbnail generation skipped (missing title or summary)."
+                    logger.info("Thumbnail generation skipped (missing title or summary).")
                     
             except Exception as e:
-                print(f"❌ Error during thumbnail generation: {e}")
+                logger.error("❌ Error during thumbnail generation step: %s", e, exc_info=True)
                 status += f"\n❌ Step 7/7: Thumbnail generation failed: {str(e)}"
             
-            # Format search terms and research results for UI display
+            # Format search terms and research results for UI display (no logging needed for these display strings)
             search_terms_display = ", ".join(search_terms) if search_terms else "No search terms generated"
             research_results_display = format_youtube_research_results(research_data, search_terms)
             
@@ -539,29 +660,30 @@ Thank you for watching, and don't forget to subscribe for more AI development tu
             )
         
     except Exception as e:
-        error_status = f"❌ Error processing video: {str(e)}"
-        print(f"Error details: {e}")
+        error_status = f"❌ Error processing video: {str(e)}" # This will be displayed in UI
+        logger.exception("Critical error in process_video: %s", e) # Full stack trace for logs
         return error_status, "", "", "", "", "", None, None, None
 
 def test_modal_connection():
     """Test if Modal connection works"""
     if not MODAL_AVAILABLE:
-        print("⚠️ Modal not available - running in demo mode")
+        logger.warning("⚠️ Modal not available - running in demo mode")
         return True
         
     try:
         # Test both functions are accessible
         if (hasattr(process_video_to_audio, 'remote') and 
-            hasattr(transcribe_audio_with_whisper, 'remote')):
-            print("✅ Modal app connection successful!")
-            print("✅ Audio extraction function ready")
-            print("✅ Whisper transcription function ready")
+            hasattr(transcribe_audio_with_whisper, 'remote')): # Add other functions if needed
+            logger.info("✅ Modal app connection successful!")
+            logger.info("✅ Audio extraction function ready")
+            logger.info("✅ Whisper transcription function ready")
+            # logger.info("✅ Thumbnail generation function ready") # Assuming it's also checked or loaded
             return True
         else:
-            print("❌ Modal functions not found")
+            logger.error("❌ Modal functions not found")
             return False
     except Exception as e:
-        print(f"❌ Modal connection error: {e}")
+        logger.error("❌ Modal connection error: %s", e, exc_info=True)
         return False
 
 def create_interface():
@@ -743,78 +865,57 @@ def create_interface():
 # Create and launch the interface
 if __name__ == "__main__":
     # Test Modal setup before starting Gradio
-    print("🧪 Testing Modal connection...")
+    logger.info("🧪 Testing Modal connection...")
     
     if MODAL_AVAILABLE:
         try:
             if test_modal_connection():
-                print("✅ Modal is ready! Starting Gradio interface...")
-                # If Modal is primary, Step 4 agent might not be needed locally
-                # unless app.py itself is run in Modal and ContentAnalysisAgent is part of that.
-                if STEP4_AGENT_AVAILABLE and content_analyzer is None:
-                    print("INFO: Modal available, local ContentAnalysisAgent not pre-initialized. Will init if needed in process_video.")
+                logger.info("✅ Modal is ready! Starting Gradio interface...")
+                if STEP4_AGENT_AVAILABLE and content_analyzer is None: # Should be initialized by now if Modal is up
+                    logger.info("INFO: Modal available, local ContentAnalysisAgent not pre-initialized. Will init if needed in process_video.")
             else:
-                print("⚠️ Modal connection failed.")
-                # If Modal fails, try to ensure local agent is up if not already
-                if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
-                    print("🔄 Modal failed, ensuring ContentAnalysisAgent for local Step 4 processing...")
+                logger.warning("⚠️ Modal connection failed.")
+                if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm): # Check llama_index settings
+                    logger.info("🔄 Modal failed, ensuring ContentAnalysisAgent for local Step 4 processing...")
                     try:
-                        content_analyzer = ContentAnalysisAgent()
-                        print("✅ ContentAnalysisAgent initialized for local fallback.")
+                        content_analyzer = ContentAnalysisAgent() # Attempt to init
+                        logger.info("✅ ContentAnalysisAgent initialized for local fallback.")
                     except Exception as e:
-                        print(f"⚠️ Error initializing ContentAnalysisAgent for local fallback: {e}.")
-        except Exception as e:
-            print(f"⚠️ Modal connection error: {e}")
+                        logger.error("⚠️ Error initializing ContentAnalysisAgent for local fallback: %s.", e, exc_info=True)
+        except Exception as e: # Catch any other exception during Modal test
+            logger.error("⚠️ Modal connection error during startup: %s", e, exc_info=True)
             if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
-                print("🔄 Modal error, ensuring ContentAnalysisAgent for local Step 4 processing...")
+                logger.info("🔄 Modal error, ensuring ContentAnalysisAgent for local Step 4 processing...")
                 try:
                     content_analyzer = ContentAnalysisAgent()
-                    print("✅ ContentAnalysisAgent initialized for local fallback after Modal error.")
+                    logger.info("✅ ContentAnalysisAgent initialized for local fallback after Modal error.")
                 except Exception as e_agent:
-                    print(f"⚠️ Error initializing ContentAnalysisAgent on Modal error: {e_agent}.")
-    else:
-        print("🎭 Modal not available.")
-        # Ensure local agent is initialized if Modal is not available from the start
+                    logger.error("⚠️ Error initializing ContentAnalysisAgent on Modal error: %s.", e_agent, exc_info=True)
+    else: # Modal not available from the start
+        logger.info("🎭 Modal not available.")
         if STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
-            print("🔄 Modal not available, ensuring ContentAnalysisAgent for local Step 4 processing...")
+            logger.info("🔄 Modal not available, ensuring ContentAnalysisAgent for local Step 4 processing...")
             try:
                 content_analyzer = ContentAnalysisAgent()
-                print("✅ ContentAnalysisAgent initialized for local use as Modal is unavailable.")
+                logger.info("✅ ContentAnalysisAgent initialized for local use as Modal is unavailable.")
             except Exception as e:
-                print(f"⚠️ Error initializing ContentAnalysisAgent as Modal is unavailable: {e}.")
+                logger.error("⚠️ Error initializing ContentAnalysisAgent as Modal is unavailable: %s.", e, exc_info=True)
 
+    # Log final status of agents before launching
     if not MODAL_AVAILABLE and not STEP4_AGENT_AVAILABLE:
-        print("🎭 Starting in full demo mode (Modal and Step 4 Agent not available)")
+        logger.info("🎭 Starting in full demo mode (Modal and Step 4 Agent not available)")
     elif not MODAL_AVAILABLE and STEP4_AGENT_AVAILABLE and content_analyzer and Settings.llm:
-        print("🎭 Starting in demo mode for Steps 1-3, with local Step 4 Content Analysis Agent.")
+        logger.info("🎭 Starting in demo mode for Steps 1-3, with local Step 4 Content Analysis Agent.")
     elif not MODAL_AVAILABLE and STEP4_AGENT_AVAILABLE and (content_analyzer is None or not Settings.llm):
-        print("🎭 Starting in demo mode for Steps 1-3. Step 4 Agent available but failed to initialize Ollama.")
-        # When Modal is available, initialize agents that will be needed
-        print(f"✅ Modal available for Steps 1-3. Agents available: Step 4: {STEP4_AGENT_AVAILABLE}, Step 5: {STEP5_AGENT_AVAILABLE}, Step 6: {STEP6_AGENT_AVAILABLE}")
-        
-        # Initialize agents for Modal context if they weren't initialized yet
-        if STEP4_AGENT_AVAILABLE and content_analyzer is None:
-            try:
-                print("Initializing ContentAnalysisAgent for Modal context...")
-                content_analyzer = ContentAnalysisAgent()
-            except Exception as e:
-                print(f"Failed to init ContentAnalysisAgent in Modal context: {e}")
-        
-        if STEP5_AGENT_AVAILABLE and youtube_researcher is None:
-            try:
-                print("Initializing YouTubeResearchAgent for Modal context...")
-                youtube_researcher = YouTubeResearchAgent()
-            except Exception as e:
-                print(f"Failed to init YouTubeResearchAgent in Modal context: {e}")
-        
-        if STEP6_AGENT_AVAILABLE and content_enhancer is None:
-            try:
-                print("Initializing ContentEnhancementAgent for Modal context...")
-                content_enhancer = ContentEnhancementAgent()
-            except Exception as e:
-                print(f"Failed to init ContentEnhancementAgent in Modal context: {e}")
+        logger.info("🎭 Starting in demo mode for Steps 1-3. Step 4 Agent available but may have failed to initialize LLM.")
+
+    if MODAL_AVAILABLE : # Only init these if Modal is available, as they depend on Modal flow data
+        logger.info("Modal available. Agents for Steps 4, 5, 6 will be initialized within Modal flow if needed.")
+        # The logic to initialize these agents if they are None is already inside process_video for the Modal path.
+        # No need to pre-initialize them here if Modal is the primary path.
 
     demo = create_interface()
+    logger.info("🚀 Launching Gradio interface on 0.0.0.0:7860")
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,

@@ -2,7 +2,17 @@ import modal
 import os
 import tempfile
 from pathlib import Path
+import logging
 
+# Basic logging setup for Modal functions.
+# Modal's own logging will capture stdout/stderr, so this is mostly for consistency
+# if these functions were ever to be run or tested outside Modal.
+# It also allows using logger.error for more explicit error logging.
+logger = logging.getLogger(__name__)
+# Note: Modal's environment might not have a pre-configured root logger handler
+# that directs to console in the same way as a local script.
+# Print statements are often more reliable for direct Modal log visibility.
+# We will use logger primarily for error conditions or specific info.
 
 # Create Modal app
 app = modal.App("youtube-content-optimizer")
@@ -52,6 +62,7 @@ def process_video_to_audio(video_bytes: bytes, filename: str) -> tuple[bytes, st
         tuple: (audio_bytes, audio_filename)
     """
     
+    # Using print for high-level status, as Modal captures it well.
     print(f"🎬 Processing video: {filename}")
     print(f"📦 Video size: {len(video_bytes) / (1024*1024):.1f} MB")
     
@@ -64,7 +75,7 @@ def process_video_to_audio(video_bytes: bytes, filename: str) -> tuple[bytes, st
         with open(video_path, "wb") as f:
             f.write(video_bytes)
         
-        print(f"✅ Video saved temporarily: {video_path}")
+        print(f"✅ Video saved temporarily: {video_path}") # Modal captures print
         
         # Step 2: Extract audio using FFmpeg
         audio_filename = f"extracted_audio_{Path(filename).stem}.wav"
@@ -82,7 +93,7 @@ def process_video_to_audio(video_bytes: bytes, filename: str) -> tuple[bytes, st
             str(audio_path)
         ]
         
-        print(f"🔄 Running FFmpeg extraction...")
+        print(f"🔄 Running FFmpeg extraction...") # Modal captures print
         
         # Execute FFmpeg
         import subprocess
@@ -91,47 +102,52 @@ def process_video_to_audio(video_bytes: bytes, filename: str) -> tuple[bytes, st
                 ffmpeg_cmd,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True # This will raise CalledProcessError if ffmpeg fails
             )
-            print(f"✅ Audio extraction successful!")
+            print(f"✅ Audio extraction successful!") # Modal captures print
             
         except subprocess.CalledProcessError as e:
+            # Use logger.error for exceptions for more structured logging if available
+            logger.error("❌ FFmpeg error during audio extraction for %s: %s", filename, e.stderr, exc_info=True)
+            # Still print stderr for Modal's default log capture
             print(f"❌ FFmpeg error: {e}")
             print(f"FFmpeg stderr: {e.stderr}")
-            raise Exception(f"Audio extraction failed: {e.stderr}")
+            raise Exception(f"Audio extraction failed: {e.stderr}") # Re-raise to Modal
         
         # Read extracted audio
         if not audio_path.exists():
-            raise Exception("Audio file was not created")
+            logger.error("❌ Audio file %s was not created by FFmpeg.", audio_path)
+            raise Exception(f"Audio file was not created: {audio_path}")
             
         with open(audio_path, "rb") as f:
             audio_bytes = f.read()
         
-        print(f"🎵 Audio extracted: {len(audio_bytes) / (1024*1024):.1f} MB")
-        print(f"📁 Original video deleted from temporary storage")
+        print(f"🎵 Audio extracted: {len(audio_bytes) / (1024*1024):.1f} MB") # Modal captures print
+        print(f"📁 Original video deleted from temporary storage") # Modal captures print
         
         return audio_bytes, audio_filename
 
-# Simplified Whisper transcription function with compatibility fixes
+# Simplified Whisper transcription function
 @app.function(
     image=whisper_image,
     gpu="A10G",  # Nvidia A10G GPU as requested
-    memory=12288,  # 12GB RAM (12 * 1024 MiB)
-    timeout=900,  # 15 minutes timeout for transcription
+    memory=12288,  # 12GB RAM (12 * 1024 MiB) # May need adjustment for larger models
+    timeout=900,  # 15 minutes timeout for transcription # May need adjustment for larger models
 )
-def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str) -> dict:
+def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str, whisper_model_size: str = "small") -> dict:
     """
-    Step 3: Transcribe audio using OpenAI Whisper (small model)
+    Step 3: Transcribe audio using OpenAI Whisper
     
     Args:
         audio_bytes: Raw audio file bytes from audio extraction
         audio_filename: Audio filename for reference
+        whisper_model_size: Size of the Whisper model to use (e.g., "tiny", "base", "small", "medium", "large-v2")
         
     Returns:
         dict: Structured transcription with text, segments, language, duration
     """
-    
-    print(f"🎙️ Starting Whisper transcription: {audio_filename}")
+    # Using print for high-level status, as Modal captures it well.
+    print(f"🎙️ Starting Whisper transcription for: {audio_filename} using model size: {whisper_model_size}")
     print(f"📦 Audio size: {len(audio_bytes) / (1024*1024):.1f} MB")
     
     # Create temporary directory for processing
@@ -143,16 +159,33 @@ def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str) -> di
         with open(audio_path, "wb") as f:
             f.write(audio_bytes)
         
-        print(f"✅ Audio saved for transcription: {audio_path}")
+        print(f"✅ Audio saved for transcription: {audio_path}") # Modal captures print
         
-        # Load Whisper model (small for speed)
+        # Load Whisper model
         import whisper
-        print(f"🔄 Loading Whisper small model...")
-        model = whisper.load_model("small")
-        print(f"✅ Whisper model loaded successfully!")
-        
+        print(f"🔄 Loading Whisper {whisper_model_size} model...") # Modal captures print
+        try:
+            model = whisper.load_model(whisper_model_size)
+            print(f"✅ Whisper {whisper_model_size} model loaded successfully!") # Modal captures print
+        except Exception as e:
+            logger.error("❌ Error loading Whisper model %s: %s", whisper_model_size, e, exc_info=True)
+            print(f"❌ Error loading Whisper model {whisper_model_size}: {e}") # For Modal logs
+            # Fallback to small model if the chosen one fails to load
+            if whisper_model_size != "small":
+                logger.warning("⚠️ Falling back to Whisper 'small' model for %s.", audio_filename)
+                print(f"⚠️ Falling back to Whisper 'small' model.") # For Modal logs
+                try:
+                    model = whisper.load_model("small")
+                    print(f"✅ Whisper 'small' model loaded successfully as fallback.") # For Modal logs
+                except Exception as e_small:
+                    logger.critical("❌ Critical Error: Failed to load even the 'small' Whisper model: %s", e_small, exc_info=True)
+                    print(f"❌ Critical Error: Failed to load even the 'small' Whisper model: {e_small}") # For Modal logs
+                    raise Exception(f"Failed to load Whisper model '{whisper_model_size}' and fallback 'small': {e_small}")
+            else: # If 'small' itself failed
+                raise Exception(f"Failed to load Whisper model '{whisper_model_size}': {e}")
+
         # Transcribe audio with compatible settings
-        print(f"🔄 Transcribing audio...")
+        print(f"🔄 Transcribing audio...") # Modal captures print
         result = model.transcribe(
             str(audio_path),
             verbose=False,  # Disable verbose to avoid potential issues
@@ -180,11 +213,11 @@ def transcribe_audio_with_whisper(audio_bytes: bytes, audio_filename: str) -> di
             "audio_filename": audio_filename
         }
         
-        print(f"✅ Transcription complete!")
-        print(f"📝 Language detected: {transcription_data['language']}")
-        print(f"⏱️ Duration: {transcription_data['duration']:.1f} seconds")
-        print(f"📄 Word count: {transcription_data['word_count']} words")
-        print(f"📁 Temporary audio file deleted")
+        print(f"✅ Transcription complete!") # Modal captures print
+        print(f"📝 Language detected: {transcription_data['language']}") # Modal captures print
+        print(f"⏱️ Duration: {transcription_data['duration']:.1f} seconds") # Modal captures print
+        print(f"📄 Word count: {transcription_data['word_count']} words") # Modal captures print
+        print(f"📁 Temporary audio file deleted") # Modal captures print
         
         return transcription_data
 
@@ -216,15 +249,18 @@ def generate_thumbnails(
         list: List of thumbnail image data (base64 encoded)
     """
     
-    print("--- generate_thumbnails INPUTS ---")
-    print(f"Optimized Title: {optimized_title}")
-    print(f"Video Summary (first 100 chars): {video_summary[:100] if video_summary else 'N/A'}...")
-    print(f"Optimized Description (first 100 chars): {optimized_description[:100] if optimized_description else 'N/A'}...")
-    print(f"Search Terms: {search_terms}")
-    print(f"Competitive Analysis (keys): {list(competitive_analysis.keys()) if competitive_analysis else 'N/A'}")
-    print("------------------------------------")
+    # Using print for high-level status, as Modal captures it well.
+    # For more detailed debugging within this function, print is often sufficient due to Modal's capture.
+    # Adding logger.info for key steps if desired for consistency, but print works fine in Modal.
+    logger.info("--- generate_thumbnails INPUTS ---")
+    logger.info("Optimized Title: %s", optimized_title)
+    logger.info("Video Summary (first 100 chars): %s...", video_summary[:100] if video_summary else 'N/A')
+    # print(f"Optimized Description (first 100 chars): {optimized_description[:100] if optimized_description else 'N/A'}...") # Example of keeping print
+    # print(f"Search Terms: {search_terms}")
+    # print(f"Competitive Analysis (keys): {list(competitive_analysis.keys()) if competitive_analysis else 'N/A'}")
+    logger.info("------------------------------------")
     
-    print(f"🎨 Starting thumbnail generation for: {optimized_title[:50]}...")
+    print(f"🎨 Starting thumbnail generation for: {optimized_title[:50]}...") # Modal captures print
     
     import torch
     from diffusers import DiffusionPipeline
@@ -234,7 +270,7 @@ def generate_thumbnails(
     import re
     
     # Load Stable Diffusion XL model
-    print("🔄 Loading Stable Diffusion XL model...")
+    print("🔄 Loading Stable Diffusion XL model...") # Modal captures print
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float16,
@@ -246,7 +282,7 @@ def generate_thumbnails(
     # Enable memory optimization
     pipe.enable_vae_slicing()
     pipe.enable_attention_slicing()
-    print("✅ Stable Diffusion XL model loaded successfully!")
+    print("✅ Stable Diffusion XL model loaded successfully!") # Modal captures print
     
     def extract_key_concepts(title: str, summary: str, search_terms: list) -> list:
         """Extract key visual concepts from video content for thumbnail generation."""
@@ -307,10 +343,64 @@ def generate_thumbnails(
         video_title_for_overlay: str, 
         video_summary_for_cue: str, 
         concepts: list,
-        original_video_title_for_context: str
+        original_video_title_for_context: str,
+        competitive_analysis: dict = None  # Added competitive_analysis
     ) -> tuple[str, str]:
         """Generate optimized prompts for viral YouTube thumbnails with text overlays."""
         
+        # --- Process Competitive Analysis ---
+        competitor_context_str = ""
+        if competitive_analysis:
+            # Prioritize top_performing_videos for distinctness context
+            top_videos = competitive_analysis.get("competitive_analysis", {}).get("top_performing_videos", [])
+            if top_videos:
+                comp_titles = [v.get("title", "") for v in top_videos[:2] if v.get("title")] # Get first 2 titles
+                if comp_titles:
+                    competitor_context_str += f"For context, some successful competing video titles include: '{comp_titles[0]}'"
+                    if len(comp_titles) > 1:
+                        competitor_context_str += f" and '{comp_titles[1]}'"
+                    competitor_context_str += f". Our thumbnail for '{original_video_title_for_context}' needs to be visually distinct and highly engaging to stand out. "
+
+            # Use common_title_words for thematic cues, if they align and are not too generic
+            common_keywords_from_comp = competitive_analysis.get("competitive_analysis", {}).get("common_title_words", [])
+            if common_keywords_from_comp:
+                relevant_comp_keywords = []
+                # Try to find 1-2 common competitor keywords that are also in our concepts or title
+                for comp_kw in common_keywords_from_comp:
+                    if any(comp_kw.lower() in c.lower() for c in concepts) or \
+                       comp_kw.lower() in original_video_title_for_context.lower():
+                        if comp_kw not in relevant_comp_keywords: # Avoid duplicates
+                             relevant_comp_keywords.append(comp_kw)
+                    if len(relevant_comp_keywords) >= 2:
+                        break
+
+                if relevant_comp_keywords:
+                    competitor_context_str += f"Consider subtly weaving in visual themes related to trending concepts like '{', '.join(relevant_comp_keywords)}' if it enhances the core message without being generic. "
+        # --- End Process Competitive Analysis ---
+
+        # --- Keyword Extraction for Style Adaptation ---
+        primary_concept = ""
+        secondary_concept = ""
+
+        if concepts:
+            primary_concept = concepts[0]
+            if len(concepts) > 1:
+                secondary_concept = concepts[1]
+
+        if not primary_concept and original_video_title_for_context:
+            # Fallback to title if no concepts
+            stop_words = {"a", "an", "the", "is", "are", "of", "to", "and", "for", "how", "what", "why", "in", "on", "with", "tutorial", "guide"}
+            title_words = [word for word in original_video_title_for_context.split() if word.lower() not in stop_words and len(word) > 3]
+            if title_words:
+                primary_concept = title_words[0]
+                if len(title_words) > 1:
+                    secondary_concept = title_words[1]
+
+        # Ensure concepts are not too long for prompt injection
+        primary_concept = primary_concept[:30] if primary_concept else ""
+        secondary_concept = secondary_concept[:30] if secondary_concept else ""
+        # --- End Keyword Extraction ---
+
         style_templates = {
             "dynamic": {
                 "base": "High-energy YouTube thumbnail, dynamic composition, vibrant contrasting colors, modern graphic elements, ",
@@ -334,7 +424,23 @@ def generate_thumbnails(
             }
         }
         
-        style_config = style_templates.get(style, style_templates["dynamic"])
+        # Get a copy of the chosen style configuration to modify it
+        style_config = style_templates.get(style, style_templates["dynamic"]).copy()
+
+        # --- Adapt Style Config with Keywords ---
+        if primary_concept:
+            if style == "dynamic":
+                style_config["base"] = f"High-energy YouTube thumbnail for a '{primary_concept}' video, dynamic composition {f'highlighting {secondary_concept}, ' if secondary_concept else ''}vibrant contrasting colors, modern graphic elements, "
+            elif style == "tech_modern":
+                style_config["base"] = f"Sleek modern tech YouTube thumbnail showcasing '{primary_concept}', {f'with elements of {secondary_concept}, ' if secondary_concept else ''}minimalist and futuristic design, gradient background with subtle abstract patterns, "
+                style_config["elements"] = f"holographic projections related to '{primary_concept}', glowing circuits or icons {f'symbolizing {secondary_concept}, ' if secondary_concept else ''}clean typography area for text overlay, UI elements, "
+            elif style == "educational":
+                style_config["base"] = f"Engaging educational YouTube thumbnail about '{primary_concept}', {f'explaining {secondary_concept}, ' if secondary_concept else ''}clear and inviting visual style, bright and warm color palette, "
+                style_config["elements"] = f"iconography representing '{primary_concept}', {f'simplified diagrams for {secondary_concept}, ' if secondary_concept else ''}organized layout for clarity, visual metaphor for learning, space for informative text overlay, "
+            elif style == "cinematic_story":
+                style_config["base"] = f"Dramatic cinematic storytelling YouTube thumbnail for '{primary_concept}', {f'featuring a narrative about {secondary_concept}, ' if secondary_concept else ''}rich color grading, epic lighting, movie poster aesthetic, "
+                style_config["elements"] = f"compelling central figure or iconic object related to '{primary_concept}', {f'evocative scene of {secondary_concept}, ' if secondary_concept else ''}hinting at a narrative, sense of depth and scale, high emotional impact, area for stylized text overlay, "
+        # --- End Adapt Style Config ---
         
         main_subject = "a key visual element related to the video" # Default
         if concepts:
@@ -391,12 +497,20 @@ def generate_thumbnails(
             style_config["base"],
             f"The main visual focus must be {main_subject}. ",
             summary_cue,
+        ]
+
+        if competitor_context_str:
+            prompt_parts.append(competitor_context_str)
+
+        prompt_parts.extend([
             f"Subtly incorporate visual themes or objects related to: {(', '.join(concepts[:3]) if concepts else 'the video topic')}. ",
             style_config["elements"],
             "The thumbnail MUST be 16:9 aspect ratio. It needs to be designed to maximize click-through rates using a powerful visual hook. ",
-            f"Artistically integrate the text \"{overlay_text}\" into the thumbnail design. The text must be very prominent, extremely clear, easily readable, and stylishly composed with the overall visual aesthetics. Use bold, impactful fonts and strong contrasting colors for the text to ensure it stands out. ",
+            # Removed instruction to render text:
+            # f"Artistically integrate the text \"{overlay_text}\" into the thumbnail design. The text must be very prominent, extremely clear, easily readable, and stylishly composed with the overall visual aesthetics. Use bold, impactful fonts and strong contrasting colors for the text to ensure it stands out. ",
+            "Ensure there is a prominent, clear area within the design suitable for a bold text overlay to be added later. This area should be visually distinct and integrated naturally with the overall composition.",
             style_config["quality"]
-        ]
+        ])
         
         title_lower = original_video_title_for_context.lower()
         if "tutorial" in title_lower or "how to" in title_lower or "guide" in title_lower:
@@ -422,21 +536,21 @@ def generate_thumbnails(
         return full_prompt, negative_prompt
 
     # Extract key concepts from all available content
-    print(f"🔄 Extracting key concepts for: {optimized_title[:50]}...")
+    print(f"🔄 Extracting key concepts for: {optimized_title[:50]}...") # Modal captures print
     key_concepts = extract_key_concepts(
         title=optimized_title, 
         summary=video_summary, 
         search_terms=search_terms
     )
     
-    print(f"🎯 Key concepts for thumbnails: {key_concepts}")
+    print(f"🎯 Key concepts for thumbnails: {key_concepts}") # Modal captures print
     
     # Generate 4 different thumbnail styles
     thumbnail_styles = ["dynamic", "tech_modern", "educational", "cinematic_story"]
     thumbnails = []
     
     for i, style in enumerate(thumbnail_styles):
-        print(f"🎨 Generating thumbnail {i+1}/{len(thumbnail_styles)} - Style: {style}...")
+        print(f"🎨 Generating thumbnail {i+1}/{len(thumbnail_styles)} - Style: {style}...") # Modal captures print
         
         try:
             # Generate prompt for this style
@@ -445,12 +559,16 @@ def generate_thumbnails(
                 video_title_for_overlay=optimized_title, 
                 video_summary_for_cue=video_summary,
                 concepts=key_concepts,
-                original_video_title_for_context=optimized_title
+                original_video_title_for_context=optimized_title,
+                competitive_analysis=competitive_analysis # Pass competitive_analysis here
             )
             
+            # For debugging, print can be useful here and Modal will capture it.
+            # logger.debug("Full Prompt (%s): %s", style, prompt)
+            # logger.debug("Full Negative Prompt: %s", negative_prompt)
             print(f"📝 Full Prompt ({style}): {prompt}") 
             print(f"🚫 Full Negative Prompt: {negative_prompt}")
-            
+
             # Generate image
             image = pipe(
                 prompt=prompt,
@@ -464,22 +582,23 @@ def generate_thumbnails(
             
             # Convert to base64 for return
             buffer = io.BytesIO()
-            image.save(buffer, format="PNG", quality=95, compress_level=1) 
+            image.save(buffer, format="PNG", quality=95, compress_level=1) # Using print for this is fine
             
             image_b64 = base64.b64encode(buffer.getvalue()).decode()
             
             thumbnails.append({
                 "style": style,
                 "image_data": image_b64,
-                "prompt_used": prompt, # Store full prompt
+                "prompt_used": prompt,
                 "concepts": key_concepts,
-                "negative_prompt_used": negative_prompt # Store negative prompt
+                "negative_prompt_used": negative_prompt
             })
             
-            print(f"✅ Thumbnail {i+1}/{len(thumbnail_styles)} generated successfully!")
+            print(f"✅ Thumbnail {i+1}/{len(thumbnail_styles)} generated successfully!") # Modal captures print
             
         except Exception as e:
-            print(f"❌ Error generating thumbnail {i+1}: {e}")
+            logger.error("❌ Error generating thumbnail %d (%s): %s", i+1, style, e, exc_info=True)
+            print(f"❌ Error generating thumbnail {i+1} ({style}): {e}") # For Modal logs
             # Add placeholder for failed generation
             thumbnails.append({
                 "style": style,
@@ -490,7 +609,9 @@ def generate_thumbnails(
                 "negative_prompt_that_failed": negative_prompt if 'negative_prompt' in locals() else "Negative prompt not generated"
             })
     
-    print(f"🎉 Thumbnail generation complete! Generated {len([t for t in thumbnails if t.get('image_data')])} successful thumbnails")
+    successful_generations = len([t for t in thumbnails if t.get('image_data')])
+    logger.info("🎉 Thumbnail generation complete! Generated %d successful thumbnails out of %d attempts.", successful_generations, len(thumbnail_styles))
+    print(f"🎉 Thumbnail generation complete! Generated {successful_generations} successful thumbnails") # For Modal logs
     
     return thumbnails
 
